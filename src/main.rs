@@ -1,5 +1,6 @@
 use eframe::egui;
 use std::process::Command;
+use chrono::Local;
 
 // Главная функция, точка входа в приложение
 fn main() -> eframe::Result {
@@ -104,7 +105,7 @@ impl AssistantApp {
         }
         else if cmd.starts_with("выполни ") {
             // Команда выполнения произвольной команды в shell
-            let shell_cmd = input.trim()[8..].trim();
+            let shell_cmd = input.trim()[10..].trim();
             if shell_cmd.is_empty() {
                 "Какую команду выполнить?".into()
             } else {
@@ -124,6 +125,11 @@ impl AssistantApp {
                     Err(e) => format!("Ошибка выполнения: {}", e)
                 }
             }
+        } else if cmd == "время" || cmd == "который час" {
+    // Вариант 1: Использование Local (местное время)
+            let now = Local::now();
+            let formatted_time = now.format("%H:%M:%S").to_string();
+            format!("Текущее время: {}", formatted_time)
         }
         else {
             // Если команда не распознана
