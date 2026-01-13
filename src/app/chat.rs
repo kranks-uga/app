@@ -6,9 +6,7 @@ use std::thread;
 /// Типы диалоговых окон
 #[derive(Debug, Clone)]
 pub enum DialogType {
-    Password,
     PackageSearch,
-    PackageInstall,
     Confirmation,
     Info,
 }

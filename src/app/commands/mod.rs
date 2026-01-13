@@ -1,11 +1,12 @@
-// Подмодули команд
-pub mod base;
-pub mod system;
-pub mod package;
+// Подключение внутренних модулей с логикой конкретных команд
+pub mod base;    // Базовые: время, дата, приветствие
+pub mod system;  // Системные: выключение, перезагрузка
+pub mod package; // Пакетные: установка и удаление (pacman/yay)
 
-use super::chat::{BackgroundTask, DialogType, TaskManager};
+use super::chat::{DialogType, TaskManager};
 
-/// Основная функция обработки команд
+/// Главная точка входа для распределения команд по категориям.
+/// Принимает ввод пользователя и ссылки на состояние интерфейса (диалоги, менеджер задач).
 pub fn process_command(
     input: &str,
     assistant_name: &str,
@@ -17,19 +18,20 @@ pub fn process_command(
     show_dialog: &mut bool,
     task_manager: &TaskManager,
 ) -> Option<String> {
+    // Нормализация ввода: удаление пробелов и приведение к нижнему регистру
     let cmd = input.trim().to_lowercase();
     
-    // Пробуем обработать базовые команды
+    // 1. Попытка обработки простых текстовых ответов
     if let Some(response) = base::process_basic_command(&cmd, assistant_name) {
         return Some(response);
     }
     
-    // Пробуем обработать системные команды
+    // 2. Попытка выполнения системных действий (shutdown/reboot)
     if let Some(response) = system::process_system_command(&cmd) {
         return Some(response);
     }
     
-    // Пробуем обработать команды управления пакетами
+    // 3. Обработка команд пакетного менеджера (требует управления состоянием диалогов)
     if let Some(response) = package::process_package_command(
         &cmd,
         dialog_type,
@@ -43,6 +45,6 @@ pub fn process_command(
         return Some(response);
     }
     
-    // Если команда не распознана
+    // Возврат сообщения об ошибке, если ни один модуль не распознал команду
     Some(format!("Неизвестная команда: '{}'", input.trim()))
 }

@@ -1,43 +1,55 @@
 use std::process::Command;
 
-/// Обрабатывает системные команды (выключение, перезагрузка)
+/// Обработка системных команд выключения и перезагрузки
 pub fn process_system_command(cmd: &str) -> Option<String> {
-    match cmd {
-        "выключить пк" | "выключить компьютер" => {
-            match Command::new("shutdown").args(&["-h", "now"]).status() {
-                Ok(_) => Some("Система выключается...".to_string()),
-                Err(e) => Some(format!("Ошибка при выключении: {}", e)),
-            }
+    // Определяем параметры команды в зависимости от ОС
+    let (prog, args) = if cfg!(windows) {
+        match cmd {
+
+            "выключить пк" | "выключить компьютер" => ("shutdown", vec!["/s", "/t", "0"]),
+
+            "перезагрузить" | "рестарт" => ("shutdown", vec!["/r", "/t", "0"]),
+            _ => return None,
         }
-        "перезагрузить" | "рестарт" => {
-            match Command::new("shutdown").args(&["-r", "now"]).status() {
-                Ok(_) => Some("Система перезагружается...".to_string()),
-                Err(e) => Some(format!("Ошибка при перезагрузке: {}", e)),
-            }
+    } else {
+        match cmd {
+
+            "выключить пк" | "выключить компьютер" => ("shutdown", vec!["-h", "now"]),
+
+            "перезагрузить" | "рестарт" => ("shutdown", vec!["-r", "now"]),
+            _ => return None,
         }
-        _ => None,
+    };
+
+    // Выполнение команды и обработка результата
+    match Command::new(prog).args(&args).status() {
+        Ok(_) => Some("Команда отправлена успешно".to_string()),
+        Err(e) => Some(format!("Ошибка выполнения: {}", e)),
     }
 }
 
-/// Выполняет произвольную shell-команду
+/// Выполнение произвольной команды через системную оболочку (sh или cmd)
 pub fn execute_shell_command(shell_cmd: &str) -> String {
     if shell_cmd.is_empty() {
-        return "Какую команду выполнить?".to_string();
+        return "Команда не указана".to_string();
     }
-    
-    match Command::new("sh").args(&["-c", shell_cmd]).output() {
+
+    // Выбор оболочки: cmd для Windows, sh для остальных ОС
+    let (shell, flag) = if cfg!(windows) { ("cmd", "/C") } else { ("sh", "-c") };
+
+    match Command::new(shell).args(&[flag, shell_cmd]).output() {
         Ok(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
-            
+
             if !stdout.is_empty() {
-                format!("Результат:\n{}", stdout.trim())
+                format!("Вывод:\n{}", stdout.trim())
             } else if !stderr.is_empty() {
                 format!("Ошибка:\n{}", stderr.trim())
             } else {
-                "Команда выполнена (нет вывода)".to_string()
+                "Выполнено (пустой вывод)".to_string()
             }
         }
-        Err(e) => format!("Ошибка выполнения: {}", e),
+        Err(e) => format!("Не удалось запустить оболочку: {}", e),
     }
 }

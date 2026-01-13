@@ -5,20 +5,16 @@ use super::ui;
 use eframe::egui;
 use std::sync::mpsc;
 
-/// Главная структура приложения - хранит все состояние
+/// Центральное хранилище состояния приложения (Single Source of Truth)
 pub struct AssistantApp {
-    // Основные компоненты
-    pub config: Config,
-    pub chat_history: ChatHistory,
-    pub task_manager: TaskManager,
+    pub config: Config,           // Настройки (имя, цвета)
+    pub chat_history: ChatHistory, // История сообщений
+    pub task_manager: TaskManager, // Модуль фоновых потоков
     
-    // Пользовательский ввод
-    pub input_text: String,
+    pub input_text: String,       // Буфер текущего ввода пользователя
+    pub show_settings: bool,      // Флаг видимости боковой панели
     
-    // UI состояние
-    pub show_settings: bool,
-    
-    // Диалоги
+    // Состояние модальных окон
     pub show_dialog: bool,
     pub dialog_type: DialogType,
     pub dialog_title: String,
@@ -26,17 +22,15 @@ pub struct AssistantApp {
     pub dialog_input: String,
     pub dialog_package: String,
     
-    // Канал для получения результатов фоновых задач
+    // Канал получения ответов от асинхронных задач (MPSC)
     pub task_result_receiver: mpsc::Receiver<String>,
 }
 
 impl AssistantApp {
-    /// Создает новый экземпляр приложения
+    /// Инициализация приложения, менеджера задач и стартового приветствия
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
-        // Инициализируем менеджер задач и канал для результатов
         let (task_manager, task_result_receiver) = TaskManager::new();
         
-        // Создаем историю чата
         let mut chat_history = ChatHistory::new(100);
         chat_history.add_message(
             "Альфонс".to_string(),
@@ -59,7 +53,7 @@ impl AssistantApp {
         }
     }
     
-    /// Обрабатывает пользовательский ввод
+    /// Логика обработки ввода: добавление в чат и вызов парсера команд
     pub fn process_input(&mut self) {
         if self.input_text.trim().is_empty() {
             return;
@@ -68,7 +62,7 @@ impl AssistantApp {
         let input = self.input_text.clone();
         self.chat_history.add_message("Вы".to_string(), input.clone());
         
-        // Обрабатываем команду
+        // Передача состояния в обработчик команд для принятия решений (UI или системных)
         let response = commands::process_command(
             &input,
             &self.config.assistant_name,
@@ -88,31 +82,30 @@ impl AssistantApp {
             );
         }
         
-        self.input_text.clear();
+        self.input_text.clear(); // Очистка поля после обработки
     }
     
-    /// Проверяет результаты фоновых задач
+    /// Неблокирующая проверка завершенных фоновых задач (пакеты, системные чеки)
     pub fn check_background_tasks(&mut self) {
-        // Пытаемся получить результат без блокировки
         while let Ok(result) = self.task_result_receiver.try_recv() {
             self.chat_history.add_message("Система".to_string(), result);
         }
     }
 }
 
-// Реализация интерфейса eframe::App
+// Главный цикл отрисовки (обновляется при каждом событии/кадре)
 impl eframe::App for AssistantApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Проверяем результаты фоновых задач
+        // Опрос фоновых потоков в начале каждого кадра
         self.check_background_tasks();
         
-        // Настраиваем стиль интерфейса
+        // Глобальная стилизация виджетов (отступы и скругления)
         let mut style = (*ctx.style()).clone();
         style.spacing.item_spacing = egui::vec2(12.0, 12.0);
         style.visuals.widgets.inactive.rounding = 12.0.into();
         ctx.set_style(style);
         
-        // Отрисовываем весь интерфейс
+        // Делегирование рендеринга модулю UI
         ui::render_ui(ctx, self);
     }
 }
