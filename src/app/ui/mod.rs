@@ -78,11 +78,31 @@ fn render_settings_panel(ctx: &egui::Context, app: &mut AssistantApp, _accent_co
             ui.add_space(20.0);
             ui.heading("Настройки");
             ui.separator();
+
+            let mut changed = false; // Флаг для отслеживания изменений
+
             ui.label("Имя ассистента:");
-            ui.text_edit_singleline(&mut app.config.assistant_name);
+            if ui.text_edit_singleline(&mut app.config.assistant_name).changed() {
+                changed = true;
+            }
+
             ui.add_space(10.0);
             ui.label("Цвет темы:");
-            ui.color_edit_button_srgb(&mut app.config.accent_color);
+            if ui.color_edit_button_srgb(&mut app.config.accent_color).changed() {
+                changed = true;
+            }
+
+            ui.vertical_centered_justified(|ui| {
+                if ui.button(egui::RichText::new("🗑 Очистить чат").color(egui::Color32::LIGHT_RED)).clicked() {
+                    app.clear_chat();
+                }
+            });
+
+            // Если пользователь что-то поменял — сохраняем немедленно
+            if changed {
+                app.config.save();
+            }
+
             ui.add_space(20.0);
             ui.separator();
             // Кнопка для системной проверки зависимостей (yay)

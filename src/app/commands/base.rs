@@ -44,6 +44,10 @@ pub fn process_basic_command(cmd: &str, assistant_name: &str) -> Option<String> 
             let now = Local::now();
             Some(format!("Текущие дата и время: {}", now.format("%d.%m.%Y %H:%M:%S")))
         }
+        "очистить" | "очистить чат" => {
+    // Мы возвращаем специальную строку, которую перехватим в основном модуле
+        Some("COMMAND_ACTION_CLEAR".to_string())
+        }
 
         // Список доступных инструкций для пользователя
         "помощь" => Some(format!("Основные команды:\n1)время\n2)дата\n3)дата и время\nСистемные команды:\n1)выключить пк")),

@@ -31,6 +31,8 @@ impl AssistantApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         let (task_manager, task_result_receiver) = TaskManager::new();
         
+        let config = Config::load(); 
+
         let mut chat_history = ChatHistory::new(100);
         chat_history.add_message(
             "Альфонс".to_string(),
@@ -38,7 +40,7 @@ impl AssistantApp {
         );
         
         Self {
-            config: Config::new(),
+            config,
             chat_history,
             task_manager,
             input_text: String::new(),
@@ -90,6 +92,13 @@ impl AssistantApp {
         while let Ok(result) = self.task_result_receiver.try_recv() {
             self.chat_history.add_message("Система".to_string(), result);
         }
+    }
+    pub fn clear_chat(&mut self) {
+        self.chat_history.clear();
+        self.chat_history.add_message(
+            self.config.assistant_name.clone(),
+            "История чата очищена. Чем могу помочь?".to_string(),
+        );
     }
 }
 

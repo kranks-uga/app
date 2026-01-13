@@ -1,27 +1,35 @@
-/// Параметры персонализации ассистента
-#[derive(Clone)]
+use serde::{Serialize, Deserialize};
+
+/// Конфигурация с поддержкой сохранения на диск
+#[derive(Serialize, Deserialize, Clone)] // Добавили Serialize и Deserialize
 pub struct Config {
     pub assistant_name: String,
-    pub accent_color: [u8; 3],  // Хранение цвета в виде массива [R, G, B]
+    pub accent_color: [u8; 3],
 }
 
 impl Default for Config {
-    /// Установка базовых настроек (по умолчанию — стиль KDE Plasma)
     fn default() -> Self {
         Self {
             assistant_name: "Альфонс".to_string(),
-            accent_color: [61, 174, 233],  // Фирменный синий цвет
+            accent_color: [61, 174, 233],
         }
     }
 }
 
 impl Config {
-    /// Инициализация конфигурации
-    pub fn new() -> Self {
-        Self::default()
+    /// Загружает настройки из ~/.config/alfons-assistant/default-config.toml
+    pub fn load() -> Self {
+        confy::load("alfons-assistant", "config").unwrap_or_default()
     }
-    
-    /// Конвертация массива байтов в тип Color32, совместимый с библиотекой egui
+
+    /// Сохраняет текущие настройки на диск
+    pub fn save(&self) {
+        if let Err(e) = confy::store("alfons-assistant", "config", self) {
+            eprintln!("Не удалось сохранить настройки: {}", e);
+        }
+    }
+
+    /// Конвертация для egui
     pub fn accent_color_egui(&self) -> eframe::egui::Color32 {
         eframe::egui::Color32::from_rgb(
             self.accent_color[0],
