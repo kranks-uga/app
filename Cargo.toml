@@ -9,6 +9,7 @@ eframe = "0.26"
 egui = "0.26"
 chrono = "0.4"
 confy = "0.6"
-# Оставляем serde обязательным, так как он нужен для работы Config
 serde = { version = "1.0", features = ["derive"] }
-
+reqwest = { version = "0.12", features = ["json"] }
+tokio = { version = "1.0", features = ["full"] }
+serde_json = "1.0"

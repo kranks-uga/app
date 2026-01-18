@@ -79,6 +79,7 @@ impl ChatHistory {
 /// Менеджер фоновых задач
 pub struct TaskManager {
     task_sender: Sender<BackgroundTask>,
+    pub result_sender: Sender<String>, // Сделано публичным для доступа из assistant_app.rs
     is_processing: Arc<AtomicBool>,
 }
 
@@ -88,6 +89,7 @@ impl TaskManager {
         let (task_sender, task_receiver) = mpsc::channel::<BackgroundTask>();
         let (result_sender, result_receiver) = mpsc::channel::<String>();
         
+        let result_sender_clone = result_sender.clone(); // Клон для фонового потока
         let is_processing = Arc::new(AtomicBool::new(false));
         let is_processing_clone = is_processing.clone();
         
@@ -116,7 +118,7 @@ impl TaskManager {
                 };
                 
                 // Отправляем результат обратно
-                let _ = result_sender.send(result);
+                let _ = result_sender_clone.send(result);
                 is_processing_clone.store(false, Ordering::SeqCst);
             }
         });
@@ -124,6 +126,7 @@ impl TaskManager {
         (
             Self {
                 task_sender,
+                result_sender, // Сохраняем здесь публичный отправитель
                 is_processing,
             },
             result_receiver,
