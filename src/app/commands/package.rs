@@ -1,230 +1,177 @@
+//! Команды управления пакетами (через yay)
+
 use std::process::Command;
+use crate::app::chat::{BackgroundTask, DialogState, TaskManager};
+use crate::app::constants::{YAY_INSTALL_DIR, YAY_AUR_URL, messages, errors};
 
-// Импортируем типы для работы с фоновыми задачами и диалогами
-use crate::app::chat::{BackgroundTask, DialogType, TaskManager};
-
-/*  ОСНОВНАЯ ФУНКЦИЯ: Обрабатывает текстовые команды от пользователя
- и переключает состояние интерфейса (открывает диалоги).
- 
- # Аргументы
- `cmd` - текст команды от пользователя
- `dialog_type` - тип отображаемого диалога (изменяется по ссылке)
- `dialog_title` - заголовок диалога (изменяется по ссылке)
- `dialog_message` - сообщение в диалоге (изменяется по ссылке)
- `dialog_input` - поле ввода в диалоге (изменяется по ссылке)
- `dialog_package` - имя пакета для операций (изменяется по ссылке)
- `show_dialog` - флаг отображения диалога (изменяется по ссылке)
- `task_manager` - менеджер фоновых задач
- 
- # Возвращает
- - `Some(String)` - текстовый ответ для чата при успешной обработке команды
- - `None` - если команда не распознана */
+/// Обработка команд пакетного менеджера
 pub fn process_package_command(
     cmd: &str,
-    dialog_type: &mut DialogType,
-    dialog_title: &mut String,
-    dialog_message: &mut String,
-    dialog_input: &mut String,
-    dialog_package: &mut String,
-    show_dialog: &mut bool,
-    task_manager: &TaskManager,
+    dialog: &mut DialogState,
+    tasks: &TaskManager,
 ) -> Option<String> {
-    // Команда для открытия окна поиска пакетов через диалог
+    // Открыть диалог поиска
     if cmd == "поиск пакетов" || cmd == "найти пакеты" {
-        *dialog_type = DialogType::PackageSearch;
-        *dialog_title = "Поиск пакетов".to_string();
-        *dialog_message = "Введите название пакета для поиска:".to_string();
-        dialog_input.clear(); // Очищаем поле ввода перед открытием диалога
-        *show_dialog = true; // Показываем диалоговое окно
-        
-        Some("Открываю диалог для поиска пакетов...".to_string())
-    } 
-    // Команда установки пакета: "установить <имя_пакета>"
-    else if cmd.starts_with("установить ") {
-        // Извлекаем имя пакета из команды (убираем префикс "установить ")
-        let package_name = cmd.trim_start_matches("установить ").trim();
-        
-        // Проверяем, что указано имя пакета
-        if package_name.is_empty() {
-            Some("Укажите имя пакета. Пример: 'установить firefox'".to_string())
-        } else {
-            // Настраиваем диалог подтверждения для установки
-            *dialog_type = DialogType::Confirmation;
-            *dialog_title = "Установка пакета".to_string();
-            *dialog_message = format!("Установить '{}' через yay?\nПотребуется ввод пароля в системном окне.", package_name);
-            *dialog_package = package_name.to_string(); // Сохраняем имя пакета для дальнейшего использования
-            *show_dialog = true;
-            
-            Some(format!("Подготовка к установке '{}'...", package_name))
-        }
-    } 
-    // Команда удаления пакета: "удалить <имя_пакета>"
-    else if cmd.starts_with("удалить ") {
-        // Извлекаем имя пакета из команды
-        let package_name = cmd.trim_start_matches("удалить ").trim();
-        
-        if package_name.is_empty() {
-            Some("Укажите имя пакета для удаления.".to_string())
-        } else {
-            // Настраиваем диалог подтверждения для удаления
-            *dialog_type = DialogType::Confirmation;
-            *dialog_title = "Удаление пакета".to_string();
-            *dialog_message = format!("Удалить '{}' из системы?", package_name);
-            *dialog_package = package_name.to_string();
-            *show_dialog = true;
-            
-            Some(format!("Подготовка к удалению '{}'...", package_name))
-        }
-    } 
-    // Команда обновления всей системы
-    else if cmd == "обновить систему" || cmd == "обновление" {
-        // Настраиваем диалог подтверждения для обновления системы
-        *dialog_type = DialogType::Confirmation;
-        *dialog_title = "Обновление системы".to_string();
-        *dialog_message = "Выполнить полное обновление yay -Syu?".to_string();
-        *show_dialog = true;
-        
-        Some("Подготовка к обновлению...".to_string())
-    } 
-    // Быстрый поиск пакетов напрямую из чата (без открытия диалога)
-    else if cmd.starts_with("поиск ") {
-        // Извлекаем поисковый запрос
-        let query = cmd.trim_start_matches("поиск ").trim();
-        
-        // Запускаем фоновую задачу поиска пакетов
-        task_manager.execute_task(BackgroundTask::SearchPackages(query.to_string()));
-        
-        Some(format!("Ищу пакеты по запросу '{}'...", query))
-    } 
-    // Неизвестная команда - возвращаем None
-    else {
-        None
+        dialog.show_search();
+        return Some("Открываю поиск пакетов...".into());
     }
+
+    // Установка: "установить <пакет>"
+    if let Some(package) = cmd.strip_prefix("установить ") {
+        let package = package.trim();
+        if package.is_empty() {
+            return Some("Укажите пакет. Пример: установить firefox".into());
+        }
+        dialog.show_confirm(
+            "Установка пакета",
+            &format!("Установить '{}' через yay?", package),
+            package,
+        );
+        return Some(format!("Подготовка к установке '{}'...", package));
+    }
+
+    // Удаление: "удалить <пакет>"
+    if let Some(package) = cmd.strip_prefix("удалить ") {
+        let package = package.trim();
+        if package.is_empty() {
+            return Some("Укажите пакет для удаления.".into());
+        }
+        dialog.show_confirm(
+            "Удаление пакета",
+            &format!("Удалить '{}' из системы?", package),
+            package,
+        );
+        return Some(format!("Подготовка к удалению '{}'...", package));
+    }
+
+    // Обновление системы
+    if cmd == "обновить систему" || cmd == "обновление" {
+        dialog.show_confirm(
+            "Обновление системы",
+            "Выполнить полное обновление (yay -Syu)?",
+            "",
+        );
+        return Some("Подготовка к обновлению...".into());
+    }
+
+    // Быстрый поиск: "поиск <запрос>"
+    if let Some(query) = cmd.strip_prefix("поиск ") {
+        let query = query.trim();
+        if !query.is_empty() {
+            tasks.execute(BackgroundTask::SearchPackages(query.into()));
+            return Some(format!("Ищу пакеты '{}'...", query));
+        }
+    }
+
+    None
 }
 
-// --- ФУНКЦИИ ИСПОЛНЕНИЯ (Вызываются TaskManager в фоновом потоке) ---
+// ============================================================================
+// Функции выполнения (вызываются из фонового потока)
+// ============================================================================
 
-/*  Выполняет поиск пакетов в репозиториях Arch Linux с помощью `yay -Ss`
- 
-# Аргументы
- - `query` - поисковый запрос (имя или описание пакета)
- 
-# Возвращает
-`String` - результат поиска в текстовом формате или сообщение об ошибке
- 
-# Примечание
-Использует системную утилиту `yay`, которая должна быть установлена в системе
-Возвращает сырой вывод команды, который затем форматируется в интерфейсе */
+/// Поиск пакетов через yay
 pub fn search_packages(query: &str) -> String {
-    // Выполняем команду yay -Ss <запрос> для поиска пакетов
-    let output = Command::new("yay")
-        .args(["-Ss", query])
-        .output(); // Захватываем stdout и stderr
-
-    // Обрабатываем результат выполнения команды
-    match output {
+    match Command::new("yay").args(["-Ss", query]).output() {
         Ok(out) => {
-            // Преобразуем байты вывода в UTF-8 строку
-            let res = String::from_utf8_lossy(&out.stdout).to_string();
-            
-            // Проверяем, не пустой ли результат
-            if res.trim().is_empty() { 
-                "Ничего не найдено.".to_string() 
-            } else { 
-                res 
+            let result = String::from_utf8_lossy(&out.stdout);
+            if result.trim().is_empty() {
+                errors::PACKAGE_NOT_FOUND.into()
+            } else {
+                result.into()
             }
         }
-        Err(e) => format!("Ошибка выполнения yay: {}", e),
+        Err(e) => format!("Ошибка yay: {}", e),
     }
 }
 
-/// Устанавливает пакет с использованием `yay -S` и прав суперпользователя через `pkexec`
-/// 
-/// # Аргументы
-/// - `package` - имя пакета для установки
-/// 
-/// # Возвращает
-/// - `String` - сообщение об успехе или ошибке установки
-/// 
-/// # Примечание
-/// - `pkexec` запускает графическое окно ввода пароля (вместо sudo в терминале)
-/// - Флаг `--noconfirm` автоматически подтверждает все запросы (не спрашивает подтверждения)
-/// - Пакет должен существовать в репозиториях или AUR
+/// Установка пакета
 pub fn install_package(package: &str) -> String {
-    // Выполняем установку с правами суперпользователя через pkexec
-    let status = Command::new("pkexec")
+    match Command::new("pkexec")
         .args(["yay", "-S", "--noconfirm", package])
-        .status(); // Получаем только код возврата
-    
-    // Анализируем код возврата команды
-    match status {
-        Ok(s) if s.success() => format!("Успешно: пакет '{}' установлен.", package),
-        _ => format!("Ошибка: не удалось установить '{}' (возможно, отмена или нет сети).", package),
+        .status()
+    {
+        Ok(s) if s.success() => format!("✓ Пакет '{}' установлен.", package),
+        _ => format!("✗ Не удалось установить '{}'.", package),
     }
 }
 
-/// Удаляет пакет из системы с использованием `yay -R` и прав суперпользователя
-/// 
-/// # Аргументы
-/// - `package` - имя пакета для удаления
-/// 
-/// # Возвращает
-/// - `String` - сообщение об успехе или ошибке удаления
-/// 
-/// # Примечание
-/// - Удаляет пакет и его зависимости, которые больше не нужны (опционально)
-/// - Использует `--noconfirm` для автоматического подтверждения операции
+/// Удаление пакета
 pub fn remove_package(package: &str) -> String {
-    // Выполняем удаление пакета через pkexec
-    let status = Command::new("pkexec")
+    match Command::new("pkexec")
         .args(["yay", "-R", "--noconfirm", package])
-        .status();
-    
-    match status {
-        Ok(s) if s.success() => format!("Успешно: пакет '{}' удален.", package),
-        _ => format!("Ошибка при удалении '{}'.", package),
+        .status()
+    {
+        Ok(s) if s.success() => format!("✓ Пакет '{}' удалён.", package),
+        _ => format!("✗ Не удалось удалить '{}'.", package),
     }
 }
 
-/// Выполняет полное обновление системы с помощью `yay -Syu`
-/// 
-/// # Возвращает
-/// - `String` - сообщение об успехе или ошибке обновления
-/// 
-/// # Примечание
-/// - Обновляет все пакеты из официальных репозиториев и AUR
-/// - `-Sy` - синхронизирует базы данных и обновляет пакеты
-/// - `-u` - обновляет установленные пакеты
-/// - Может занять значительное время в зависимости от количества обновлений
+/// Обновление системы
 pub fn update_system() -> String {
-    // Выполняем полное обновление системы
-    let status = Command::new("pkexec")
+    match Command::new("pkexec")
         .args(["yay", "-Syu", "--noconfirm"])
-        .status();
-    
-    match status {
-        Ok(s) if s.success() => "Система успешно обновлена!".to_string(),
-        _ => "Ошибка в процессе обновления системы.".to_string(),
+        .status()
+    {
+        Ok(s) if s.success() => "✓ Система обновлена!".into(),
+        _ => "✗ Ошибка при обновлении.".into(),
     }
 }
 
-/// Проверяет наличие утилиты `yay` в системе
-/// 
-/// # Возвращает
-/// - `String` - сообщение о наличии или отсутствии yay
-/// 
-/// # Примечание
-/// - Использует команду `which` для поиска исполняемого файла в PATH
-/// - yay необходим для работы всех функций этого модуля
-/// - В случае отсутствия yay, предлагает команду для его установки
+/// Проверка наличия yay
 pub fn check_yay_installed() -> String {
-    // Ищем yay в системных путях
-    let output = Command::new("which").arg("yay").output();
-    
-    // Проверяем успешность выполнения команды which
-    if output.is_ok() && output.unwrap().status.success() {
-        "yay найден и готов к работе.".to_string()
+    if is_yay_installed() {
+        messages::YAY_FOUND.into()
     } else {
-        "ВНИМАНИЕ: yay не найден. Установите его: sudo pacman -S yay".to_string()
+        messages::YAY_NOT_FOUND.into()
+    }
+}
+
+/// Проверка yay (возвращает bool)
+pub fn is_yay_installed() -> bool {
+    Command::new("which")
+        .arg("yay")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Установка yay из AUR
+pub fn install_yay() -> String {
+    if is_yay_installed() {
+        return messages::YAY_ALREADY.into();
+    }
+
+    // 1. Установка зависимостей
+    let deps = Command::new("pkexec")
+        .args(["pacman", "-S", "--needed", "--noconfirm", "git", "base-devel"])
+        .status();
+
+    if deps.is_err() || !deps.unwrap().success() {
+        return errors::YAY_DEPS_FAILED.into();
+    }
+
+    // 2. Клонирование репозитория
+    let _ = Command::new("rm").args(["-rf", YAY_INSTALL_DIR]).status();
+
+    let clone = Command::new("git")
+        .args(["clone", YAY_AUR_URL, YAY_INSTALL_DIR])
+        .status();
+
+    if clone.is_err() || !clone.unwrap().success() {
+        return errors::YAY_CLONE_FAILED.into();
+    }
+
+    // 3. Сборка и установка
+    let build = Command::new("sh")
+        .args(["-c", &format!("cd {} && makepkg -si --noconfirm", YAY_INSTALL_DIR)])
+        .status();
+
+    // Очистка
+    let _ = Command::new("rm").args(["-rf", YAY_INSTALL_DIR]).status();
+
+    match build {
+        Ok(s) if s.success() && is_yay_installed() => messages::YAY_INSTALLED.into(),
+        _ => errors::YAY_BUILD_FAILED.into(),
     }
 }

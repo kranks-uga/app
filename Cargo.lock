@@ -125,6 +125,7 @@ dependencies = [
  "confy",
  "eframe",
  "egui",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",

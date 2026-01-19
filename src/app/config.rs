@@ -1,7 +1,10 @@
-use serde::{Serialize, Deserialize};
+//! Конфигурация пользователя
 
-/// Конфигурация с поддержкой сохранения на диск
-#[derive(Serialize, Deserialize, Clone)] // Добавили Serialize и Deserialize
+use serde::{Deserialize, Serialize};
+use super::constants::{CONFIG_APP_NAME, DEFAULT_ASSISTANT_NAME, DEFAULT_ACCENT_COLOR};
+
+/// Настройки приложения (сохраняются на диск)
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
     pub assistant_name: String,
     pub accent_color: [u8; 3],
@@ -10,22 +13,22 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            assistant_name: "Альфонс".to_string(),
-            accent_color: [61, 174, 233],
+            assistant_name: DEFAULT_ASSISTANT_NAME.to_string(),
+            accent_color: DEFAULT_ACCENT_COLOR,
         }
     }
 }
 
 impl Config {
-    /// Загружает настройки из ~/.config/alfons-assistant/default-config.toml
+    /// Загружает из ~/.config/alfons-assistant/config.toml
     pub fn load() -> Self {
-        confy::load("alfons-assistant", "config").unwrap_or_default()
+        confy::load(CONFIG_APP_NAME, "config").unwrap_or_default()
     }
 
-    /// Сохраняет текущие настройки на диск
+    /// Сохраняет на диск
     pub fn save(&self) {
-        if let Err(e) = confy::store("alfons-assistant", "config", self) {
-            eprintln!("Не удалось сохранить настройки: {}", e);
+        if let Err(e) = confy::store(CONFIG_APP_NAME, "config", self) {
+            eprintln!("Ошибка сохранения: {}", e);
         }
     }
 

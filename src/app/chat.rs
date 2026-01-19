@@ -1,17 +1,71 @@
+//! Модуль чата и фоновых задач
+
 use std::sync::mpsc::{self, Sender, Receiver};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
+use super::constants::MAX_CHAT_MESSAGES;
+
+// ============================================================================
+// Диалоги
+// ============================================================================
 
 /// Типы диалоговых окон
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub enum DialogType {
+    #[default]
+    Info,
     PackageSearch,
     Confirmation,
-    Info,
 }
 
-/// Типы фоновых задач для управления пакетами
+/// Состояние диалогового окна (упрощает передачу параметров)
+#[derive(Debug, Clone, Default)]
+pub struct DialogState {
+    pub visible: bool,
+    pub dialog_type: DialogType,
+    pub title: String,
+    pub message: String,
+    pub input: String,
+    pub package: String,
+}
+
+impl DialogState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Показать диалог поиска пакетов
+    pub fn show_search(&mut self) {
+        self.visible = true;
+        self.dialog_type = DialogType::PackageSearch;
+        self.title = "Поиск пакетов".to_string();
+        self.message = "Введите название пакета:".to_string();
+        self.input.clear();
+    }
+
+    /// Показать диалог подтверждения
+    pub fn show_confirm(&mut self, title: &str, message: &str, package: &str) {
+        self.visible = true;
+        self.dialog_type = DialogType::Confirmation;
+        self.title = title.to_string();
+        self.message = message.to_string();
+        self.package = package.to_string();
+    }
+
+    /// Скрыть диалог
+    pub fn hide(&mut self) {
+        self.visible = false;
+        self.input.clear();
+        self.package.clear();
+    }
+}
+
+// ============================================================================
+// Фоновые задачи
+// ============================================================================
+
+/// Типы фоновых задач
 #[derive(Debug)]
 pub enum BackgroundTask {
     SearchPackages(String),
@@ -19,8 +73,12 @@ pub enum BackgroundTask {
     RemovePackage(String),
     UpdateSystem,
     CheckYay,
-    ExecuteCommand(String),
+    InstallYay,
 }
+
+// ============================================================================
+// История чата
+// ============================================================================
 
 /// Сообщение в чате
 #[derive(Clone)]
@@ -36,64 +94,65 @@ pub struct ChatHistory {
 }
 
 impl ChatHistory {
-    /// Создает новую историю чата с ограничением по количеству сообщений
     pub fn new(max_messages: usize) -> Self {
         Self {
             messages: Vec::with_capacity(max_messages),
             max_messages,
         }
     }
-    
+
     /// Добавляет сообщение в историю
-    pub fn add_message(&mut self, sender: String, text: String) {
-        let message = ChatMessage { sender, text };
-        self.messages.push(message);
-        
-        // Удаляем старые сообщения, если превышен лимит
+    pub fn add_message(&mut self, sender: impl Into<String>, text: impl Into<String>) {
+        self.messages.push(ChatMessage {
+            sender: sender.into(),
+            text: text.into(),
+        });
+
+        // Удаляем старые сообщения при превышении лимита
         if self.messages.len() > self.max_messages {
             self.messages.remove(0);
         }
     }
-    
-    /// Очищает историю чата
+
+    /// Очищает историю
     pub fn clear(&mut self) {
         self.messages.clear();
     }
-    
-    /// Возвращает ссылку на все сообщения
+
+    /// Возвращает все сообщения
     pub fn messages(&self) -> &[ChatMessage] {
         &self.messages
     }
-    
-    /// Проверяет, пуста ли история
-    pub fn is_empty(&self) -> bool {
-        self.messages.is_empty()
-    }
-    
-    /// Возвращает количество сообщений
-    pub fn len(&self) -> usize {
-        self.messages.len()
+}
+
+impl Default for ChatHistory {
+    fn default() -> Self {
+        Self::new(MAX_CHAT_MESSAGES)
     }
 }
+
+// ============================================================================
+// Менеджер задач
+// ============================================================================
 
 /// Менеджер фоновых задач
 pub struct TaskManager {
     task_sender: Sender<BackgroundTask>,
-    pub result_sender: Sender<String>, // Сделано публичным для доступа из assistant_app.rs
+    pub result_sender: Sender<String>,
     is_processing: Arc<AtomicBool>,
 }
 
 impl TaskManager {
-    /// Создает новый менеджер задач и возвращает канал для получения результатов
+    /// Создаёт менеджер и возвращает канал для получения результатов
     pub fn new() -> (Self, Receiver<String>) {
         let (task_sender, task_receiver) = mpsc::channel::<BackgroundTask>();
         let (result_sender, result_receiver) = mpsc::channel::<String>();
-        
-        let result_sender_clone = result_sender.clone(); // Клон для фонового потока
+
+        let result_sender_clone = result_sender.clone();
         let is_processing = Arc::new(AtomicBool::new(false));
         let is_processing_clone = is_processing.clone();
-        
-        // Запускаем фоновый поток для обработки задач
+
+        // Фоновый поток для обработки задач
         thread::spawn(move || {
             while let Ok(task) = task_receiver.recv() {
                 let result = match task {
@@ -112,36 +171,35 @@ impl TaskManager {
                     BackgroundTask::CheckYay => {
                         super::commands::package::check_yay_installed()
                     }
-                    BackgroundTask::ExecuteCommand(cmd) => {
-                        super::commands::system::execute_shell_command(&cmd)
+                    BackgroundTask::InstallYay => {
+                        super::commands::package::install_yay()
                     }
                 };
-                
-                // Отправляем результат обратно
+
                 let _ = result_sender_clone.send(result);
                 is_processing_clone.store(false, Ordering::SeqCst);
             }
         });
-        
+
         (
             Self {
                 task_sender,
-                result_sender, // Сохраняем здесь публичный отправитель
+                result_sender,
                 is_processing,
             },
             result_receiver,
         )
     }
-    
+
     /// Запускает фоновую задачу
-    pub fn execute_task(&self, task: BackgroundTask) {
+    pub fn execute(&self, task: BackgroundTask) {
         if self.task_sender.send(task).is_ok() {
             self.is_processing.store(true, Ordering::SeqCst);
         }
     }
-    
+
     /// Проверяет, выполняется ли задача
-    pub fn is_processing(&self) -> bool {
+    pub fn is_busy(&self) -> bool {
         self.is_processing.load(Ordering::SeqCst)
     }
 }

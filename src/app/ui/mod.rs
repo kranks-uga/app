@@ -1,67 +1,61 @@
+//! Графический интерфейс
 
-// src/app/ui/mod.rs
-
-pub mod dialogs; // Модуль модальных окон
-pub mod widgets; // Модуль кастомных элементов (пузыри сообщений)
+pub mod dialogs;
+pub mod widgets;
 
 use super::AssistantApp;
+use super::chat::BackgroundTask;
+use super::commands::package::is_yay_installed;
+use super::constants::{APP_NAME, APP_VERSION, SETTINGS_PANEL_WIDTH, messages};
 use eframe::egui;
 
-/// Главная функция сборки интерфейса (Layout менеджер)
-pub fn render_ui(ctx: &egui::Context, app: &mut AssistantApp) {
-    let accent_color = app.config.accent_color_egui();
-    
-    // 1. Верхняя панель (Header)
-    render_header(ctx, app, accent_color);
-    
-    // 2. Боковая панель настроек (появляется по клику на шестеренку)
+/// Главная функция рендеринга
+pub fn render(ctx: &egui::Context, app: &mut AssistantApp) {
+    let accent = app.config.accent_color_egui();
+
+    render_header(ctx, app, accent);
+
     if app.show_settings {
-        render_settings_panel(ctx, app, accent_color);
+        render_settings(ctx, app, accent);
     }
-    
-    // 3. Нижняя панель ввода (Bottom)
-    // Отрисовывается до CentralPanel, чтобы зарезервировать место внизу
-    render_input_panel(ctx, app, accent_color);
-    
-    // 4. Основная область чата (Central)
-    // Занимает всё оставшееся пространство между Header и Input
-    render_chat_panel(ctx, app, accent_color);
-    
-    // 5. Слой диалогов (Floating)
-    // Рендерится поверх всех панелей при наличии активного события
-    if app.show_dialog {
-        dialogs::render_dialog(ctx, app, accent_color);
+
+    render_input(ctx, app, accent);
+    render_chat(ctx, app, accent);
+
+    if app.dialog.visible {
+        dialogs::render(ctx, app, accent);
     }
 }
 
-/// Отрисовка шапки: заголовок, индикатор загрузки и кнопка настроек
-fn render_header(ctx: &egui::Context, app: &mut AssistantApp, accent_color: egui::Color32) {
-
+/// Шапка приложения
+fn render_header(ctx: &egui::Context, app: &mut AssistantApp, accent: egui::Color32) {
     egui::TopBottomPanel::top("header").show(ctx, |ui| {
         ui.add_space(10.0);
-
         ui.horizontal(|ui| {
             ui.add_space(10.0);
+
+            // Название
             ui.heading(
                 egui::RichText::new(app.config.assistant_name.to_uppercase())
-                    .strong().color(accent_color).size(22.0),
+                    .strong()
+                    .color(accent)
+                    .size(22.0),
             );
-            
-            // Индикатор выполнения фоновых задач (например, установка пакетов)
-            if app.task_manager.is_processing() {
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add_space(10.0);
-                    ui.label(egui::RichText::new("⏳ Обработка...").color(egui::Color32::YELLOW));
-                });
-            }
-            
-            // Кнопка переключения видимости панели настроек
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(10.0);
+
+                // Кнопка настроек
                 if ui.button(egui::RichText::new("⚙").size(20.0)).clicked() {
                     app.show_settings = !app.show_settings;
+                }
+
+                // Индикатор загрузки
+                if app.tasks.is_busy() {
+                    ui.label(
+                        egui::RichText::new(messages::PROCESSING)
+                            .color(egui::Color32::YELLOW),
+                    );
                 }
             });
         });
@@ -69,79 +63,110 @@ fn render_header(ctx: &egui::Context, app: &mut AssistantApp, accent_color: egui
     });
 }
 
-/// Конфигурация приложения: имя ассистента и выбор цвета темы
-fn render_settings_panel(ctx: &egui::Context, app: &mut AssistantApp, _accent_color: egui::Color32) {
-    egui::SidePanel::right("settings_panel")
-        .default_width(250.0)
-
+/// Панель настроек
+fn render_settings(ctx: &egui::Context, app: &mut AssistantApp, accent: egui::Color32) {
+    egui::SidePanel::right("settings")
+        .default_width(SETTINGS_PANEL_WIDTH)
         .show(ctx, |ui| {
             ui.add_space(20.0);
             ui.heading("Настройки");
             ui.separator();
 
-            let mut changed = false; // Флаг для отслеживания изменений
+            let mut changed = false;
+
+            // Персонализация
+            ui.add_space(10.0);
+            ui.label(egui::RichText::new("Персонализация").strong());
+            ui.add_space(5.0);
 
             ui.label("Имя ассистента:");
-            if ui.text_edit_singleline(&mut app.config.assistant_name).changed() {
-                changed = true;
-            }
+            changed |= ui.text_edit_singleline(&mut app.config.assistant_name).changed();
 
             ui.add_space(10.0);
             ui.label("Цвет темы:");
-            if ui.color_edit_button_srgb(&mut app.config.accent_color).changed() {
-                changed = true;
-            }
+            changed |= ui.color_edit_button_srgb(&mut app.config.accent_color).changed();
 
-            ui.vertical_centered_justified(|ui| {
-                if ui.button(egui::RichText::new("🗑 Очистить чат").color(egui::Color32::LIGHT_RED)).clicked() {
-                    app.clear_chat();
-                }
-            });
-
-            // Если пользователь что-то поменял — сохраняем немедленно
             if changed {
                 app.config.save();
             }
 
+            // Чат
             ui.add_space(20.0);
             ui.separator();
-            // Кнопка для системной проверки зависимостей (yay)
-            if ui.button("Проверить наличие yay").clicked() {
-                app.task_manager.execute_task(super::chat::BackgroundTask::CheckYay);
+            ui.add_space(10.0);
+            ui.label(egui::RichText::new("Чат").strong());
+            ui.add_space(5.0);
+
+            if ui.button(egui::RichText::new("🗑 Очистить чат").color(egui::Color32::LIGHT_RED)).clicked() {
+                app.clear_chat();
             }
+
+            // Пакетный менеджер
+            ui.add_space(20.0);
+            ui.separator();
+            ui.add_space(10.0);
+            ui.label(egui::RichText::new("Пакетный менеджер").strong());
+            ui.add_space(5.0);
+
+            let yay_ok = is_yay_installed();
+
+            if yay_ok {
+                ui.label(egui::RichText::new("✓ yay установлен").color(egui::Color32::LIGHT_GREEN));
+            } else {
+                ui.label(egui::RichText::new("✗ yay не найден").color(egui::Color32::LIGHT_RED));
+            }
+
+            ui.add_space(5.0);
+            ui.horizontal(|ui| {
+                if ui.button("🔍 Проверить").clicked() {
+                    app.tasks.execute(BackgroundTask::CheckYay);
+                }
+                if !yay_ok && ui.button(egui::RichText::new("📦 Установить").color(accent)).clicked() {
+                    app.tasks.execute(BackgroundTask::InstallYay);
+                    app.chat.add_message("Система", messages::YAY_INSTALLING);
+                }
+            });
+
+            // О программе
+            ui.add_space(20.0);
+            ui.separator();
+            ui.add_space(10.0);
+            ui.label(egui::RichText::new("О программе").strong());
+            ui.add_space(5.0);
+            ui.label(format!("{} — помощник для Arch Linux", APP_NAME));
+            ui.label(egui::RichText::new(format!("v{}", APP_VERSION)).weak());
         });
 }
 
-/// Область истории сообщений с автоматической прокруткой вниз
-fn render_chat_panel(ctx: &egui::Context, app: &mut AssistantApp, accent_color: egui::Color32) {
-
+/// Область чата
+fn render_chat(ctx: &egui::Context, app: &mut AssistantApp, accent: egui::Color32) {
     egui::CentralPanel::default().show(ctx, |ui| {
         egui::ScrollArea::vertical()
-            .auto_shrink([false; 2]) // Запрет сжатия области, если сообщений мало
-            .stick_to_bottom(true)   // Принудительная прокрутка к новым сообщениям
-
+            .auto_shrink([false; 2])
+            .stick_to_bottom(true)
             .show(ui, |ui| {
-                ui.add_space(15.0);
-                for message in app.chat_history.messages() {
-                    widgets::render_message_bubble(ui, message, accent_color);
+                ui.add_space(10.0);
+                for msg in app.chat.messages() {
+                    widgets::render_message(ui, msg, accent);
                     ui.add_space(8.0);
                 }
+                ui.add_space(10.0);
             });
     });
 }
 
-/// Поле ввода команды и кнопка отправки
-fn render_input_panel(ctx: &egui::Context, app: &mut AssistantApp, accent_color: egui::Color32) {
-    egui::TopBottomPanel::bottom("input_area")
+/// Поле ввода
+fn render_input(ctx: &egui::Context, app: &mut AssistantApp, accent: egui::Color32) {
+    egui::TopBottomPanel::bottom("input")
         .frame(egui::Frame::none().inner_margin(egui::Margin {
-            left: 20.0, right: 20.0, top: 15.0, bottom: 30.0,
+            left: 20.0,
+            right: 20.0,
+            top: 15.0,
+            bottom: 30.0,
         }))
-
         .show(ctx, |ui| {
-
             ui.horizontal(|ui| {
-                // Основное текстовое поле
-                let text_edit = ui.add_sized(
+                let input = ui.add_sized(
                     [ui.available_width() - 130.0, 45.0],
                     egui::TextEdit::singleline(&mut app.input_text)
                         .margin(egui::vec2(15.0, 11.0))
@@ -151,16 +176,14 @@ fn render_input_panel(ctx: &egui::Context, app: &mut AssistantApp, accent_color:
                 ui.add_space(10.0);
 
                 let btn = egui::Button::new(egui::RichText::new("ОТПРАВИТЬ").strong())
-                    .fill(accent_color)
+                    .fill(accent)
                     .min_size(egui::vec2(110.0, 45.0));
 
-                // Логика отправки: клик или нажатие Enter
+                let enter = input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
 
-                if ui.add(btn).clicked() || 
-
-                   (text_edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+                if ui.add(btn).clicked() || enter {
                     app.process_input();
-                    text_edit.request_focus(); // Возвращаем курсор в поле после отправки
+                    input.request_focus();
                 }
             });
         });

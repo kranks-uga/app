@@ -1,6 +1,11 @@
-use serde::{Deserialize, Serialize};
+//! Локальный AI через Ollama
+
 use reqwest::Client;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use super::tools::ToolRegistry;
+use crate::app::constants::{OLLAMA_URL, OLLAMA_MODEL, OLLAMA_TIMEOUT_SECS, errors};
 
 #[derive(Serialize)]
 struct OllamaRequest {
@@ -15,41 +20,67 @@ struct OllamaResponse {
     response: String,
 }
 
+/// Клиент для работы с Ollama
 pub struct LocalAi {
     client: Client,
     model: String,
+    tools: ToolRegistry,
 }
 
 impl LocalAi {
-    pub fn new(model: &str) -> Self {
+    pub fn new() -> Self {
         Self {
             client: Client::builder()
-                .timeout(Duration::from_secs(60)) // ИИ может думать долго
+                .timeout(Duration::from_secs(OLLAMA_TIMEOUT_SECS))
                 .build()
                 .unwrap_or_default(),
-            model: model.to_string(),
+            model: OLLAMA_MODEL.to_string(),
+            tools: ToolRegistry::new(),
         }
     }
 
-    pub async fn generate(&self, user_input: &str) -> Result<String, String> {
+    /// Генерирует ответ на запрос пользователя
+    pub async fn generate(&self, input: &str) -> Result<String, String> {
         let payload = OllamaRequest {
             model: self.model.clone(),
-            prompt: user_input.to_string(),
+            prompt: input.to_string(),
             stream: false,
-            system: "Ты помощник Альфонс для Arch Linux. Отвечай кратко и по делу.".to_string(),
+            system: self.tools.generate_system_prompt(),
         };
 
-        let res = self.client
-            .post("http://localhost:11434/api/generate")
+        let response = self
+            .client
+            .post(OLLAMA_URL)
             .json(&payload)
             .send()
             .await
-            .map_err(|e| format!("Ошибка связи с Ollama: {}. Убедитесь, что сервис запущен.", e))?;
+            .map_err(|e| format!("{}: {}", errors::OLLAMA_CONNECTION, e))?;
 
-        let data = res.json::<OllamaResponse>()
+        let data: OllamaResponse = response
+            .json()
             .await
-            .map_err(|e| format!("Ошибка обработки ответа: {}", e))?;
+            .map_err(|e| format!("{}: {}", errors::OLLAMA_PARSE, e))?;
 
-        Ok(data.response)
+        // Обрабатываем инструменты в ответе
+        Ok(self.process_tools(&data.response))
+    }
+
+    /// Заменяет маркеры [TOOL:...] на результаты выполнения
+    fn process_tools(&self, response: &str) -> String {
+        let re = Regex::new(r"\[TOOL:([^\]]+)\]").unwrap();
+
+        re.replace_all(response, |caps: &regex::Captures| {
+            let tool = &caps[1];
+            self.tools
+                .execute(tool)
+                .unwrap_or_else(|| format!("[?{}]", tool))
+        })
+        .to_string()
+    }
+}
+
+impl Default for LocalAi {
+    fn default() -> Self {
+        Self::new()
     }
 }
