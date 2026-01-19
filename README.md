@@ -19,7 +19,7 @@
 
 ```bash
 # Клонировать репозиторий
-git clone <repo-url>
+git clone https://github.com/kranks-uga/app.git
 cd app
 
 # Установить Ollama и загрузить модель
