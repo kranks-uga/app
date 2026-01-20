@@ -4,6 +4,7 @@ use std::sync::mpsc::{self, Sender, Receiver};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
+use chrono::{Local, DateTime};
 use super::constants::MAX_CHAT_MESSAGES;
 
 // ============================================================================
@@ -74,6 +75,8 @@ pub enum BackgroundTask {
     UpdateSystem,
     CheckYay,
     InstallYay,
+    ShutdownSystem,
+    RebootSystem,
 }
 
 // ============================================================================
@@ -85,6 +88,7 @@ pub enum BackgroundTask {
 pub struct ChatMessage {
     pub sender: String,
     pub text: String,
+    pub timestamp: DateTime<Local>,
 }
 
 /// Управление историей чата
@@ -106,6 +110,7 @@ impl ChatHistory {
         self.messages.push(ChatMessage {
             sender: sender.into(),
             text: text.into(),
+            timestamp: Local::now(),
         });
 
         // Удаляем старые сообщения при превышении лимита
@@ -174,6 +179,12 @@ impl TaskManager {
                     BackgroundTask::InstallYay => {
                         super::commands::package::install_yay()
                     }
+                    BackgroundTask::ShutdownSystem => {
+                        super::commands::system::execute_shutdown()
+                    }
+                    BackgroundTask::RebootSystem => {
+                        super::commands::system::execute_reboot()
+                    }
                 };
 
                 let _ = result_sender_clone.send(result);
@@ -201,5 +212,91 @@ impl TaskManager {
     /// Проверяет, выполняется ли задача
     pub fn is_busy(&self) -> bool {
         self.is_processing.load(Ordering::SeqCst)
+    }
+}
+
+// ============================================================================
+// История ввода команд
+// ============================================================================
+
+const MAX_INPUT_HISTORY: usize = 50;
+
+/// История введённых команд для навигации стрелками
+pub struct InputHistory {
+    entries: Vec<String>,
+    position: Option<usize>,
+    current_input: String,
+}
+
+impl InputHistory {
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::with_capacity(MAX_INPUT_HISTORY),
+            position: None,
+            current_input: String::new(),
+        }
+    }
+
+    /// Добавляет команду в историю
+    pub fn push(&mut self, input: &str) {
+        let input = input.trim();
+        if input.is_empty() {
+            return;
+        }
+        // Не добавляем дубликаты подряд
+        if self.entries.last().map(|s| s.as_str()) != Some(input) {
+            self.entries.push(input.to_string());
+            if self.entries.len() > MAX_INPUT_HISTORY {
+                self.entries.remove(0);
+            }
+        }
+        self.position = None;
+    }
+
+    /// Переход вверх по истории (предыдущая команда)
+    pub fn up(&mut self, current: &str) -> Option<&str> {
+        if self.entries.is_empty() {
+            return None;
+        }
+
+        match self.position {
+            None => {
+                self.current_input = current.to_string();
+                self.position = Some(self.entries.len() - 1);
+            }
+            Some(0) => return Some(&self.entries[0]),
+            Some(pos) => {
+                self.position = Some(pos - 1);
+            }
+        }
+
+        self.position.map(|p| self.entries[p].as_str())
+    }
+
+    /// Переход вниз по истории (следующая команда)
+    pub fn down(&mut self) -> Option<&str> {
+        match self.position {
+            None => None,
+            Some(pos) => {
+                if pos + 1 >= self.entries.len() {
+                    self.position = None;
+                    Some(self.current_input.as_str())
+                } else {
+                    self.position = Some(pos + 1);
+                    Some(&self.entries[pos + 1])
+                }
+            }
+        }
+    }
+
+    /// Сбрасывает позицию (при вводе нового текста)
+    pub fn reset(&mut self) {
+        self.position = None;
+    }
+}
+
+impl Default for InputHistory {
+    fn default() -> Self {
+        Self::new()
     }
 }

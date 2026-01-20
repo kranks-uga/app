@@ -19,5 +19,6 @@ pub mod guides;        // Обучающие гайды
 pub mod ai;            // Локальный ИИ (Ollama)
 pub mod ui;            // Графический интерфейс
 pub mod assistant_app; // Главная структура
+pub mod command_log;   // Логирование команд
 
 pub use assistant_app::AssistantApp;

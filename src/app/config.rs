@@ -1,13 +1,19 @@
 //! Конфигурация пользователя
 
 use serde::{Deserialize, Serialize};
-use super::constants::{CONFIG_APP_NAME, DEFAULT_ASSISTANT_NAME, DEFAULT_ACCENT_COLOR};
+use super::constants::{CONFIG_APP_NAME, DEFAULT_ASSISTANT_NAME, DEFAULT_ACCENT_COLOR, OLLAMA_MODEL};
 
 /// Настройки приложения (сохраняются на диск)
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
     pub assistant_name: String,
     pub accent_color: [u8; 3],
+    #[serde(default = "default_ollama_model")]
+    pub ollama_model: String,
+}
+
+fn default_ollama_model() -> String {
+    OLLAMA_MODEL.to_string()
 }
 
 impl Default for Config {
@@ -15,6 +21,7 @@ impl Default for Config {
         Self {
             assistant_name: DEFAULT_ASSISTANT_NAME.to_string(),
             accent_color: DEFAULT_ACCENT_COLOR,
+            ollama_model: OLLAMA_MODEL.to_string(),
         }
     }
 }

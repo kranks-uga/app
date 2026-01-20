@@ -1,7 +1,7 @@
 //! Главная структура приложения
 
 use super::config::Config;
-use super::chat::{ChatHistory, TaskManager, DialogState};
+use super::chat::{ChatHistory, TaskManager, DialogState, InputHistory};
 use super::commands::{self, base::CMD_CLEAR_CHAT};
 use super::constants::messages;
 use super::guides::GuideRegistry;
@@ -9,6 +9,7 @@ use super::ui;
 use super::ai::local_provider::LocalAi;
 use eframe::egui;
 use std::sync::{mpsc, Arc};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Центральное хранилище состояния приложения
 pub struct AssistantApp {
@@ -22,6 +23,8 @@ pub struct AssistantApp {
     pub input_text: String,
     pub show_settings: bool,
     pub dialog: DialogState,
+    pub input_history: InputHistory,
+    pub ollama_online: Arc<AtomicBool>,
 
     // Фоновые задачи
     pub tasks: TaskManager,
@@ -36,14 +39,27 @@ impl AssistantApp {
         let mut chat = ChatHistory::default();
         chat.add_message(&config.assistant_name, messages::WELCOME);
 
+        let ai = Arc::new(LocalAi::new());
+        ai.set_model(&config.ollama_model);
+
+        // Запускаем проверку статуса Ollama
+        let ollama_online = Arc::new(AtomicBool::new(false));
+        let ollama_online_clone = ollama_online.clone();
+        tokio::spawn(async move {
+            let status = super::ai::local_provider::check_ollama_status().await;
+            ollama_online_clone.store(status, Ordering::SeqCst);
+        });
+
         Self {
             config,
             chat,
             guides: GuideRegistry::new(),
-            ai: Arc::new(LocalAi::new()),
+            ai,
             input_text: String::new(),
             show_settings: false,
             dialog: DialogState::new(),
+            input_history: InputHistory::new(),
+            ollama_online,
             tasks,
             task_receiver,
         }
@@ -57,6 +73,7 @@ impl AssistantApp {
         }
 
         let input = input.to_string();
+        self.input_history.push(&input);
         self.chat.add_message("Вы", &input);
 
         // Пробуем обработать как команду
@@ -148,7 +165,7 @@ impl AssistantApp {
                 }
             } else {
                 // Команда не распознана - показываем ошибку
-                result = result.replace(&marker, &format!("❌ команда '{}' не распознана", cmd));
+                result = result.replace(&marker, &format!("[!] команда '{}' не распознана", cmd));
             }
         }
 

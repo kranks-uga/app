@@ -91,8 +91,8 @@ pub fn install_package(package: &str) -> String {
         .args(["yay", "-S", "--noconfirm", package])
         .status()
     {
-        Ok(s) if s.success() => format!("✓ Пакет '{}' установлен.", package),
-        _ => format!("✗ Не удалось установить '{}'.", package),
+        Ok(s) if s.success() => format!("[OK] Пакет '{}' установлен.", package),
+        _ => format!("[X] Не удалось установить '{}'.", package),
     }
 }
 
@@ -102,8 +102,8 @@ pub fn remove_package(package: &str) -> String {
         .args(["yay", "-R", "--noconfirm", package])
         .status()
     {
-        Ok(s) if s.success() => format!("✓ Пакет '{}' удалён.", package),
-        _ => format!("✗ Не удалось удалить '{}'.", package),
+        Ok(s) if s.success() => format!("[OK] Пакет '{}' удалён.", package),
+        _ => format!("[X] Не удалось удалить '{}'.", package),
     }
 }
 
@@ -113,8 +113,8 @@ pub fn update_system() -> String {
         .args(["yay", "-Syu", "--noconfirm"])
         .status()
     {
-        Ok(s) if s.success() => "✓ Система обновлена!".into(),
-        _ => "✗ Ошибка при обновлении.".into(),
+        Ok(s) if s.success() => "[OK] Система обновлена!".into(),
+        _ => "[X] Ошибка при обновлении.".into(),
     }
 }
 

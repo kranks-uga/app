@@ -7,6 +7,7 @@ pub mod guide;
 
 use super::chat::{DialogState, TaskManager};
 use super::guides::GuideRegistry;
+use super::command_log;
 
 /// Обрабатывает команду и возвращает ответ
 ///
@@ -22,21 +23,25 @@ pub fn process_command(
 
     // 1. Базовые команды (время, дата, помощь)
     if let Some(r) = base::process_basic_command(&cmd, assistant_name) {
+        command_log::log_command(&cmd, &r);
         return Some(r);
     }
 
-    // 2. Системные команды (выключение, перезагрузка)
-    if let Some(r) = system::process_system_command(&cmd) {
+    // 2. Системные команды (выключение, перезагрузка) - с диалогом подтверждения
+    if let Some(r) = system::process_system_command(&cmd, dialog) {
+        command_log::log_command(&cmd, &r);
         return Some(r);
     }
 
     // 3. Пакетный менеджер
     if let Some(r) = package::process_package_command(&cmd, dialog, tasks) {
+        command_log::log_command(&cmd, &r);
         return Some(r);
     }
 
     // 4. Гайды
     if let Some(r) = guide::process_guide_command(&cmd, guides) {
+        command_log::log_command(&cmd, "гайд показан");
         return Some(r);
     }
 

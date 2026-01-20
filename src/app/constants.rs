@@ -29,7 +29,7 @@ pub const SETTINGS_PANEL_WIDTH: f32 = 280.0;
 pub mod messages {
     pub const WELCOME: &str = "Система Arch Linux готова. Введите команду или задайте вопрос ИИ.";
     pub const CHAT_CLEARED: &str = "История чата очищена. Чем могу помочь?";
-    pub const PROCESSING: &str = "⏳ Обработка...";
+    pub const PROCESSING: &str = "Обработка...";
     pub const YAY_FOUND: &str = "yay найден и готов к работе.";
     pub const YAY_NOT_FOUND: &str = "yay не найден. Нажмите 'Установить yay' в настройках.";
     pub const YAY_INSTALLING: &str = "Начинаю установку yay... Это может занять некоторое время.";

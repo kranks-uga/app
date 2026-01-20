@@ -57,7 +57,8 @@ pub fn render(ctx: &egui::Context, app: &mut AssistantApp, accent: egui::Color32
                                     }
                                 });
                             }
-                            DialogType::Confirmation if !app.dialog.package.is_empty() => {
+                            DialogType::Confirmation if !app.dialog.package.is_empty()
+                                && !app.dialog.package.starts_with("__") => {
                                 ui.label(
                                     egui::RichText::new(&app.dialog.package)
                                         .strong()
@@ -117,6 +118,10 @@ fn handle_action(app: &mut AssistantApp) {
                 app.tasks.execute(BackgroundTask::RemovePackage(package.clone()));
             } else if title.contains("Обновление") {
                 app.tasks.execute(BackgroundTask::UpdateSystem);
+            } else if package == "__shutdown__" {
+                app.tasks.execute(BackgroundTask::ShutdownSystem);
+            } else if package == "__reboot__" {
+                app.tasks.execute(BackgroundTask::RebootSystem);
             }
         }
         DialogType::Info => {}

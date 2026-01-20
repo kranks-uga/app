@@ -1,5 +1,6 @@
 use chrono::Local;
 use std::collections::HashMap;
+use std::process::Command;
 
 /// Тип функции-обработчика инструмента
 pub type ToolHandler = fn() -> String;
@@ -38,6 +39,28 @@ impl ToolRegistry {
 
         registry.register("список_гайдов", "показать доступные обучающие гайды", || {
             "pacman, aur, wifi, systemd, gpu, audio, locale, backup".to_string()
+        });
+
+        // Системная информация
+        registry.register("память", "показать использование RAM", || {
+            get_memory_info()
+        });
+
+        registry.register("диск", "показать использование дисков", || {
+            get_disk_info()
+        });
+
+        registry.register("cpu", "показать информацию о процессоре", || {
+            get_cpu_info()
+        });
+
+        registry.register("система", "показать общую информацию о системе", || {
+            format!(
+                "Память: {}\nCPU: {}\nДиск: {}",
+                get_memory_info(),
+                get_cpu_info(),
+                get_disk_info()
+            )
         });
 
         registry
@@ -102,7 +125,8 @@ r#"Ты помощник Альфонс для Arch Linux. Отвечай кра
 3. КОМАНДЫ установки/удаления/обновления ТОЛЬКО открывают диалог! НЕ говори "установлено" или "обновлено" сразу!
 4. После команды установки скажи "откроется диалог подтверждения" или просто используй команду
 5. Если спрашивают "как установить" - объясни или предложи [CMD:гайд pacman]
-6. Будь проактивным - если можешь выполнить команду, делай это
+6. ОПАСНЫЕ КОМАНДЫ (выключить пк, перезагрузить) выполняй ТОЛЬКО если пользователь ЯВНО попросил это сделать!
+7. На вопросы "что ты умеешь?" или "какие команды есть?" - ОТВЕЧАЙ ТЕКСТОМ, НЕ выполняй команды!
 
 ПРИМЕРЫ:
 - "Который час?" -> "Сейчас [TOOL:время]"
@@ -111,6 +135,8 @@ r#"Ты помощник Альфонс для Arch Linux. Отвечай кра
 - "Как настроить wifi?" -> "[CMD:гайд wifi]"
 - "Покажи гайды" -> "[CMD:гайды]"
 - "Обнови систему" -> "[CMD:обновить систему]" (откроется диалог)
+- "Что ты умеешь?" -> Перечисли возможности ТЕКСТОМ, НЕ выполняй команды!
+- "Выключи компьютер" -> "[CMD:выключить пк]" (только по явному запросу!)
 
 Отвечай кратко. НЕ пиши текст после команд установки/удаления/обновления."#,
             tools_list
@@ -122,4 +148,73 @@ impl Default for ToolRegistry {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// ============================================================================
+// Функции получения системной информации
+// ============================================================================
+
+/// Получает информацию об использовании памяти
+fn get_memory_info() -> String {
+    let output = Command::new("free")
+        .args(["-h", "--si"])
+        .output();
+
+    match output {
+        Ok(out) => {
+            let text = String::from_utf8_lossy(&out.stdout);
+            // Парсим вторую строку (Mem:)
+            if let Some(line) = text.lines().nth(1) {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 3 {
+                    return format!("{} / {} (использовано)", parts[2], parts[1]);
+                }
+            }
+            "Не удалось получить".into()
+        }
+        Err(_) => "Ошибка выполнения free".into(),
+    }
+}
+
+/// Получает информацию об использовании дисков
+fn get_disk_info() -> String {
+    let output = Command::new("df")
+        .args(["-h", "/"])
+        .output();
+
+    match output {
+        Ok(out) => {
+            let text = String::from_utf8_lossy(&out.stdout);
+            if let Some(line) = text.lines().nth(1) {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 5 {
+                    return format!("{} / {} ({})", parts[2], parts[1], parts[4]);
+                }
+            }
+            "Не удалось получить".into()
+        }
+        Err(_) => "Ошибка выполнения df".into(),
+    }
+}
+
+/// Получает информацию о процессоре
+fn get_cpu_info() -> String {
+    // Имя процессора
+    let name = std::fs::read_to_string("/proc/cpuinfo")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("model name"))
+                .and_then(|l| l.split(':').nth(1))
+                .map(|s| s.trim().to_string())
+        })
+        .unwrap_or_else(|| "Неизвестно".into());
+
+    // Загрузка (из /proc/loadavg)
+    let load = std::fs::read_to_string("/proc/loadavg")
+        .ok()
+        .and_then(|s| s.split_whitespace().next().map(|s| s.to_string()))
+        .unwrap_or_else(|| "?".into());
+
+    format!("{} (загрузка: {})", name, load)
 }

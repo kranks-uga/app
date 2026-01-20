@@ -37,6 +37,9 @@ pub fn render_message(ui: &mut egui::Ui, msg: &ChatMessage, accent: egui::Color3
         egui::Layout::left_to_right(egui::Align::TOP)
     };
 
+    // Максимальная ширина пузыря - 70% от доступной ширины
+    let max_bubble_width = ui.available_width() * 0.7;
+
     ui.with_layout(layout, |ui| {
         egui::Frame::none()
             .fill(bg)
@@ -44,22 +47,42 @@ pub fn render_message(ui: &mut egui::Ui, msg: &ChatMessage, accent: egui::Color3
             .rounding(rounding)
             .inner_margin(12.0)
             .show(ui, |ui| {
-                // Имя отправителя
-                ui.label(
-                    egui::RichText::new(&msg.sender)
-                        .strong()
-                        .color(name_color)
-                        .size(12.0),
-                );
+                ui.set_max_width(max_bubble_width);
+
+                // Заголовок: имя + время
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(&msg.sender)
+                            .strong()
+                            .color(name_color)
+                            .size(12.0),
+                    );
+                    ui.add_space(10.0);
+                    ui.label(
+                        egui::RichText::new(msg.timestamp.format("%H:%M").to_string())
+                            .weak()
+                            .size(10.0),
+                    );
+                });
 
                 ui.add_space(2.0);
 
-                // Текст сообщения
-                ui.label(
-                    egui::RichText::new(&msg.text)
-                        .color(egui::Color32::WHITE)
-                        .size(15.0),
+                // Текст сообщения с переносом
+                let text_response = ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(&msg.text)
+                            .color(egui::Color32::WHITE)
+                            .size(15.0),
+                    )
+                    .wrap(true)
+                    .sense(egui::Sense::click()),
                 );
+
+                // Копирование по клику
+                if text_response.clicked() {
+                    ui.output_mut(|o| o.copied_text = msg.text.clone());
+                }
+                text_response.on_hover_text("Нажмите чтобы скопировать");
             });
     });
 }
