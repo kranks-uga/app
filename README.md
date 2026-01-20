@@ -22,6 +22,10 @@
 git clone https://github.com/kranks-uga/app.git
 cd app
 
+# Установить rust
+sudo pacman -S rustup
+rustup default stable
+
 # Установить Ollama и загрузить модель
 yay -S ollama
 ollama pull llama3
