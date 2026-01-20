@@ -6,82 +6,96 @@ use eframe::egui;
 
 /// Отрисовка модального диалога
 pub fn render(ctx: &egui::Context, app: &mut AssistantApp, accent: egui::Color32) {
-    // Затемнение фона
-    let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
-        egui::Id::new("modal_bg"),
+    // Затемнение фона на нижнем слое
+    let screen_rect = ctx.screen_rect();
+    let overlay_painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Middle,
+        egui::Id::new("dialog_overlay"),
     ));
-    painter.rect_filled(ctx.screen_rect(), 0.0, egui::Color32::from_black_alpha(160));
+    overlay_painter.rect_filled(
+        screen_rect,
+        0.0,
+        egui::Color32::from_black_alpha(160),
+    );
 
-    // Окно диалога
-    egui::Window::new(&app.dialog.title)
-        .collapsible(false)
-        .resizable(false)
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, -100.0])
+    // Диалог как Area на слое Foreground (выше затемнения)
+    egui::Area::new(egui::Id::new("dialog_window"))
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, -100.0))
+        .order(egui::Order::Foreground)
         .show(ctx, |ui| {
-            ui.vertical_centered(|ui| {
-                ui.add_space(10.0);
+            egui::Frame::window(&ctx.style())
+                .show(ui, |ui| {
+                    ui.set_min_width(400.0);
+                    ui.set_max_width(500.0);
 
-                // Сообщение
-                for line in app.dialog.message.lines() {
-                    ui.label(egui::RichText::new(line).size(15.0));
-                }
+                    // Заголовок
+                    ui.heading(&app.dialog.title);
+                    ui.separator();
 
-                ui.add_space(15.0);
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(10.0);
 
-                // Контент в зависимости от типа
-                match app.dialog.dialog_type {
-                    DialogType::PackageSearch => {
+                        // Сообщение
+                        for line in app.dialog.message.lines() {
+                            ui.label(egui::RichText::new(line).size(15.0));
+                        }
+
+                        ui.add_space(15.0);
+
+                        // Контент в зависимости от типа
+                        match app.dialog.dialog_type {
+                            DialogType::PackageSearch => {
+                                ui.horizontal(|ui| {
+                                    ui.label("Пакет:");
+                                    let input = ui.add(
+                                        egui::TextEdit::singleline(&mut app.dialog.input)
+                                            .hint_text("название...")
+                                            .desired_width(200.0),
+                                    );
+                                    if app.dialog.visible {
+                                        input.request_focus();
+                                    }
+                                });
+                            }
+                            DialogType::Confirmation if !app.dialog.package.is_empty() => {
+                                ui.label(
+                                    egui::RichText::new(&app.dialog.package)
+                                        .strong()
+                                        .color(accent),
+                                );
+                            }
+                            _ => {}
+                        }
+
+                        ui.add_space(20.0);
+
+                        // Кнопки
                         ui.horizontal(|ui| {
-                            ui.label("Пакет:");
-                            let input = ui.add(
-                                egui::TextEdit::singleline(&mut app.dialog.input)
-                                    .hint_text("название...")
-                                    .desired_width(200.0),
-                            );
-                            if app.dialog.visible {
-                                input.request_focus();
+                            let btn_size = egui::vec2(100.0, 30.0);
+
+                            // Отмена
+                            if ui.add_sized(btn_size, egui::Button::new("Отмена")).clicked() {
+                                app.dialog.hide();
+                            }
+
+                            // Основная кнопка
+                            let action_text = match app.dialog.dialog_type {
+                                DialogType::PackageSearch => "Найти",
+                                DialogType::Confirmation => "Подтвердить",
+                                DialogType::Info => "OK",
+                            };
+
+                            let action_btn = egui::Button::new(egui::RichText::new(action_text).strong())
+                                .fill(accent);
+
+                            if ui.add_sized(btn_size, action_btn).clicked() {
+                                handle_action(app);
                             }
                         });
-                    }
-                    DialogType::Confirmation if !app.dialog.package.is_empty() => {
-                        ui.label(
-                            egui::RichText::new(&app.dialog.package)
-                                .strong()
-                                .color(accent),
-                        );
-                    }
-                    _ => {}
-                }
 
-                ui.add_space(20.0);
-
-                // Кнопки
-                ui.horizontal(|ui| {
-                    let btn_size = egui::vec2(100.0, 30.0);
-
-                    // Отмена
-                    if ui.add_sized(btn_size, egui::Button::new("Отмена")).clicked() {
-                        app.dialog.hide();
-                    }
-
-                    // Основная кнопка
-                    let action_text = match app.dialog.dialog_type {
-                        DialogType::PackageSearch => "Найти",
-                        DialogType::Confirmation => "Подтвердить",
-                        DialogType::Info => "OK",
-                    };
-
-                    let action_btn = egui::Button::new(egui::RichText::new(action_text).strong())
-                        .fill(accent);
-
-                    if ui.add_sized(btn_size, action_btn).clicked() {
-                        handle_action(app);
-                    }
+                        ui.add_space(10.0);
+                    });
                 });
-
-                ui.add_space(10.0);
-            });
         });
 }
 

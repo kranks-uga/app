@@ -22,6 +22,7 @@ pub fn render(ctx: &egui::Context, app: &mut AssistantApp) {
     render_input(ctx, app, accent);
     render_chat(ctx, app, accent);
 
+    // Диалог с затемнением
     if app.dialog.visible {
         dialogs::render(ctx, app, accent);
     }
@@ -79,10 +80,6 @@ fn render_settings(ctx: &egui::Context, app: &mut AssistantApp, accent: egui::Co
             ui.label(egui::RichText::new("Персонализация").strong());
             ui.add_space(5.0);
 
-            ui.label("Имя ассистента:");
-            changed |= ui.text_edit_singleline(&mut app.config.assistant_name).changed();
-
-            ui.add_space(10.0);
             ui.label("Цвет темы:");
             changed |= ui.color_edit_button_srgb(&mut app.config.accent_color).changed();
 

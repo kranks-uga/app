@@ -61,21 +61,23 @@ impl LocalAi {
             .await
             .map_err(|e| format!("{}: {}", errors::OLLAMA_PARSE, e))?;
 
-        // Обрабатываем инструменты в ответе
-        Ok(self.process_tools(&data.response))
+        // Обрабатываем инструменты и команды в ответе
+        Ok(self.process_response(&data.response))
     }
 
-    /// Заменяет маркеры [TOOL:...] на результаты выполнения
-    fn process_tools(&self, response: &str) -> String {
-        let re = Regex::new(r"\[TOOL:([^\]]+)\]").unwrap();
-
-        re.replace_all(response, |caps: &regex::Captures| {
+    /// Обрабатывает маркеры [TOOL:...] и [CMD:...] в ответе
+    fn process_response(&self, response: &str) -> String {
+        // Сначала обрабатываем TOOL маркеры
+        let tool_re = Regex::new(r"\[TOOL:([^\]]+)\]").unwrap();
+        let with_tools = tool_re.replace_all(response, |caps: &regex::Captures| {
             let tool = &caps[1];
             self.tools
                 .execute(tool)
                 .unwrap_or_else(|| format!("[?{}]", tool))
-        })
-        .to_string()
+        });
+
+        // CMD маркеры оставляем как есть - они будут обработаны в assistant_app
+        with_tools.to_string()
     }
 }
 

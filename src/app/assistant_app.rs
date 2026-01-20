@@ -99,7 +99,9 @@ impl AssistantApp {
             // AI ответы содержат имя ассистента
             if result.starts_with(&self.config.assistant_name) {
                 if let Some((name, text)) = result.split_once(": ") {
-                    self.chat.add_message(name, text);
+                    // Обрабатываем команды от AI
+                    let processed_text = self.process_ai_commands(text);
+                    self.chat.add_message(name, &processed_text);
                 } else {
                     self.chat.add_message("Система", &result);
                 }
@@ -107,6 +109,50 @@ impl AssistantApp {
                 self.chat.add_message("Система", &result);
             }
         }
+    }
+
+    /// Обрабатывает маркеры [CMD:...] в ответе AI и выполняет команды
+    fn process_ai_commands(&mut self, text: &str) -> String {
+        use regex::Regex;
+
+        let cmd_re = Regex::new(r"\[CMD:([^\]]+)\]").unwrap();
+        let mut result = text.to_string();
+
+        // Находим все команды в тексте
+        let commands: Vec<String> = cmd_re
+            .captures_iter(text)
+            .map(|cap| cap[1].to_string())
+            .collect();
+
+        // Выполняем каждую команду
+        for cmd in commands {
+            let marker = format!("[CMD:{}]", cmd);
+
+            let cmd_response = commands::process_command(
+                &cmd,
+                &self.config.assistant_name,
+                &mut self.dialog,
+                &self.tasks,
+                &self.guides,
+            );
+
+            if let Some(response) = cmd_response {
+                // Проверяем специальные команды
+                if response == commands::base::CMD_CLEAR_CHAT {
+                    self.clear_chat();
+                    result = result.replace(&marker, "");
+                } else {
+                    // Убираем маркер, оставляем только текст AI
+                    // Результат команды будет показан через диалог или системное сообщение
+                    result = result.replace(&marker, "");
+                }
+            } else {
+                // Команда не распознана - показываем ошибку
+                result = result.replace(&marker, &format!("❌ команда '{}' не распознана", cmd));
+            }
+        }
+
+        result
     }
 
     /// Очистка чата
