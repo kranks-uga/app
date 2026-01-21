@@ -27,7 +27,7 @@ sudo pacman -S rustup
 rustup default stable
 
 # Установить Ollama и загрузить модель
-yay -S ollama
+curl -fsSL https://ollama.com/install.sh | sh
 ollama pull llama3
 
 # Запустить Ollama
