@@ -7,7 +7,7 @@ use std::sync::{RwLock, OnceLock};
 use std::time::Duration;
 use std::process::Command;
 use super::tools::ToolRegistry;
-use crate::app::constants::{OLLAMA_URL, OLLAMA_MODEL, OLLAMA_CUSTOM_MODEL, OLLAMA_TIMEOUT_SECS, errors, messages};
+use crate::app::constants::{OLLAMA_URL, OLLAMA_MODEL, OLLAMA_CUSTOM_MODEL, OLLAMA_TIMEOUT_SECS, OLLAMA_INSTALL_SCRIPT, errors, messages};
 
 /// Статический Regex для парсинга [TOOL:...] маркеров
 fn tool_regex() -> &'static Regex {
@@ -267,4 +267,66 @@ PARAMETER temperature 0.7
 PARAMETER top_p 0.9
 PARAMETER num_ctx 4096
 "#
+}
+
+/// Проверяет, установлена ли Ollama
+pub fn is_ollama_installed() -> bool {
+    Command::new("which")
+        .arg("ollama")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Устанавливает Ollama через официальный скрипт
+/// curl -fsSL https://ollama.com/install.sh | sh
+pub fn install_ollama() -> String {
+    // Проверяем, не установлена ли уже
+    if is_ollama_installed() {
+        return messages::OLLAMA_ALREADY.to_string();
+    }
+
+    // Скачиваем и выполняем установочный скрипт
+    let result = Command::new("sh")
+        .arg("-c")
+        .arg(format!("curl -fsSL {} | sh", OLLAMA_INSTALL_SCRIPT))
+        .output();
+
+    match result {
+        Ok(output) if output.status.success() => {
+            messages::OLLAMA_INSTALLED.to_string()
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            format!("{} ({})", errors::OLLAMA_INSTALL_FAILED, stderr.trim())
+        }
+        Err(e) => {
+            format!("{} ({})", errors::OLLAMA_INSTALL_FAILED, e)
+        }
+    }
+}
+
+/// Запускает сервис Ollama в фоне
+pub fn start_ollama_service() -> String {
+    // Проверяем, установлена ли Ollama
+    if !is_ollama_installed() {
+        return errors::OLLAMA_INSTALL_FAILED.to_string();
+    }
+
+    // Запускаем ollama serve в фоне
+    let result = Command::new("sh")
+        .arg("-c")
+        .arg("ollama serve &")
+        .spawn();
+
+    match result {
+        Ok(_) => {
+            // Даём серверу время запуститься
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            messages::OLLAMA_STARTED.to_string()
+        }
+        Err(e) => {
+            format!("{} ({})", errors::OLLAMA_START_FAILED, e)
+        }
+    }
 }

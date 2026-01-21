@@ -3,6 +3,7 @@
 use std::process::Command;
 use crate::app::chat::{BackgroundTask, DialogState, TaskManager};
 use crate::app::constants::{YAY_INSTALL_DIR, YAY_AUR_URL, messages, errors};
+use crate::app::desktop::DesktopEnvironment;
 
 /// Обработка команд пакетного менеджера
 pub fn process_package_command(
@@ -86,42 +87,63 @@ pub fn search_packages(query: &str) -> String {
 }
 
 /// Установка пакета
-/// yay сам запросит sudo при необходимости, pkexec не нужен
+/// Запускаем в терминале для интерактивного sudo
 pub fn install_package(package: &str) -> String {
-    match Command::new("yay")
-        .args(["-S", "--noconfirm", package])
-        .status()
-    {
-        Ok(s) if s.success() => format!("[OK] Пакет '{}' установлен.", package),
-        Ok(s) => format!("[X] Не удалось установить '{}' (код: {:?}).", package, s.code()),
-        Err(e) => format!("[X] Ошибка запуска yay: {}", e),
-    }
+    run_in_terminal(&format!("yay -S {}", package), &format!("Установка {}", package))
 }
 
 /// Удаление пакета
-/// yay сам запросит sudo при необходимости
+/// Запускаем в терминале для интерактивного sudo
 pub fn remove_package(package: &str) -> String {
-    match Command::new("yay")
-        .args(["-R", "--noconfirm", package])
-        .status()
-    {
-        Ok(s) if s.success() => format!("[OK] Пакет '{}' удалён.", package),
-        Ok(s) => format!("[X] Не удалось удалить '{}' (код: {:?}).", package, s.code()),
-        Err(e) => format!("[X] Ошибка запуска yay: {}", e),
+    run_in_terminal(&format!("yay -R {}", package), &format!("Удаление {}", package))
+}
+
+/// Возвращает аргументы для запуска команды в конкретном терминале
+fn get_terminal_args(term: &str, cmd: &str) -> Option<Vec<String>> {
+    let args = match term {
+        "kitty" => vec!["--hold".to_string(), "-e".to_string(), "sh".to_string(), "-c".to_string(), cmd.to_string()],
+        "alacritty" => vec!["-e".to_string(), "sh".to_string(), "-c".to_string(), format!("{}; echo 'Нажмите Enter...'; read", cmd)],
+        "gnome-terminal" | "kgx" => vec!["--".to_string(), "sh".to_string(), "-c".to_string(), format!("{}; echo 'Нажмите Enter...'; read", cmd)],
+        "konsole" => vec!["-e".to_string(), "sh".to_string(), "-c".to_string(), format!("{}; echo 'Нажмите Enter...'; read", cmd)],
+        "xfce4-terminal" => vec!["-e".to_string(), format!("sh -c '{}; echo Нажмите Enter...; read'", cmd)],
+        "xterm" => vec!["-hold".to_string(), "-e".to_string(), "sh".to_string(), "-c".to_string(), cmd.to_string()],
+        _ => return None,
+    };
+    Some(args)
+}
+
+/// Запускает команду в терминале (с учётом текущего DE)
+fn run_in_terminal(cmd: &str, action: &str) -> String {
+    let de = DesktopEnvironment::detect();
+    let terminals = de.terminal_priority();
+
+    for term in terminals {
+        // Проверяем, установлен ли терминал
+        if !Command::new("which").arg(term).output().map(|o| o.status.success()).unwrap_or(false) {
+            continue;
+        }
+
+        // Получаем аргументы для терминала
+        let args = match get_terminal_args(term, cmd) {
+            Some(a) => a,
+            None => continue,
+        };
+
+        // Запускаем
+        match Command::new(term).args(&args).spawn() {
+            Ok(_) => return format!("[OK] {} запущено в {}", action, term),
+            Err(_) => continue,
+        }
     }
+
+    format!("[X] Не найден терминал для {}. Установите {} или другой терминал.",
+            de.name(), de.preferred_terminal())
 }
 
 /// Обновление системы
-/// yay сам запросит sudo при необходимости
+/// Запускаем в терминале, т.к. yay требует интерактивный ввод для sudo
 pub fn update_system() -> String {
-    match Command::new("yay")
-        .args(["-Syu", "--noconfirm"])
-        .status()
-    {
-        Ok(s) if s.success() => "[OK] Система обновлена!".into(),
-        Ok(s) => format!("[X] Ошибка при обновлении (код: {:?}).", s.code()),
-        Err(e) => format!("[X] Ошибка запуска yay: {}", e),
-    }
+    run_in_terminal("yay -Syu", "Обновление системы")
 }
 
 /// Проверка наличия yay

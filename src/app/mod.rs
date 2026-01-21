@@ -22,5 +22,6 @@ pub mod ui;            // Графический интерфейс
 pub mod assistant_app; // Главная структура
 pub mod command_log;   // Логирование команд
 pub mod installer;     // Установка в систему
+pub mod desktop;       // Определение DE и стили
 
 pub use assistant_app::AssistantApp;

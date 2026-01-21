@@ -125,15 +125,50 @@ fn render_settings(ctx: &egui::Context, app: &mut AssistantApp, accent: egui::Co
             ui.label(egui::RichText::new("ИИ (Ollama)").strong());
             ui.add_space(5.0);
 
-            // Статус
+            // Статус установки
+            let ollama_installed = app.ollama_installed.load(Ordering::SeqCst);
             let ollama_online = app.ollama_online.load(Ordering::SeqCst);
-            if ollama_online {
-                ui.label(egui::RichText::new("[OK] Подключено").color(egui::Color32::LIGHT_GREEN));
+
+            if ollama_installed {
+                ui.label(egui::RichText::new("[OK] Ollama установлена").color(egui::Color32::LIGHT_GREEN));
             } else {
-                ui.label(egui::RichText::new("[X] Недоступно").color(egui::Color32::LIGHT_RED));
+                ui.label(egui::RichText::new("[X] Ollama не установлена").color(egui::Color32::LIGHT_RED));
+                ui.add_space(3.0);
+                if ui.button(egui::RichText::new("Установить Ollama").color(accent)).clicked() {
+                    app.tasks.execute(BackgroundTask::InstallOllama);
+                    app.chat.add_message("Система", messages::OLLAMA_INSTALLING);
+                    // Обновим статус после установки
+                    let ollama_installed = app.ollama_installed.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_secs(30));
+                        ollama_installed.store(super::ai::local_provider::is_ollama_installed(), Ordering::SeqCst);
+                    });
+                }
             }
 
+            // Статус сервиса
             ui.add_space(5.0);
+            if ollama_online {
+                ui.label(egui::RichText::new("[OK] Сервис запущен").color(egui::Color32::LIGHT_GREEN));
+            } else {
+                ui.label(egui::RichText::new("[X] Сервис не запущен").color(egui::Color32::LIGHT_RED));
+                if ollama_installed {
+                    ui.add_space(3.0);
+                    if ui.button(egui::RichText::new("Запустить Ollama").color(accent)).clicked() {
+                        app.tasks.execute(BackgroundTask::StartOllama);
+                        app.chat.add_message("Система", messages::OLLAMA_STARTING);
+                        // Обновим статус после запуска
+                        let ollama_online = app.ollama_online.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                            let status = super::ai::local_provider::check_ollama_status().await;
+                            ollama_online.store(status, Ordering::SeqCst);
+                        });
+                    }
+                }
+            }
+
+            ui.add_space(10.0);
             ui.label("Модель:");
             let model_response = ui.add(
                 egui::TextEdit::singleline(&mut app.config.ollama_model)
@@ -148,6 +183,10 @@ fn render_settings(ctx: &egui::Context, app: &mut AssistantApp, accent: egui::Co
             ui.add_space(5.0);
             if ui.button("Проверить соединение").clicked() {
                 let ollama_online = app.ollama_online.clone();
+                let ollama_installed = app.ollama_installed.clone();
+                std::thread::spawn(move || {
+                    ollama_installed.store(super::ai::local_provider::is_ollama_installed(), Ordering::SeqCst);
+                });
                 tokio::spawn(async move {
                     let status = super::ai::local_provider::check_ollama_status().await;
                     ollama_online.store(status, Ordering::SeqCst);
@@ -253,6 +292,7 @@ fn render_settings(ctx: &egui::Context, app: &mut AssistantApp, accent: egui::Co
             ui.add_space(5.0);
             ui.label(format!("{} — помощник для Arch Linux", APP_NAME));
             ui.label(egui::RichText::new(format!("v{}", APP_VERSION)).weak());
+            ui.label(egui::RichText::new(format!("DE: {}", app.desktop_env.name())).weak().small());
 
             // Установка в систему
             ui.add_space(20.0);

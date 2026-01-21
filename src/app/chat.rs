@@ -81,6 +81,8 @@ pub enum BackgroundTask {
     CreateCustomModel,
     InstallToSystem,
     UninstallFromSystem,
+    InstallOllama,
+    StartOllama,
 }
 
 // ============================================================================
@@ -199,6 +201,12 @@ impl TaskManager {
                     BackgroundTask::UninstallFromSystem => {
                         let result = super::installer::uninstall();
                         result.message
+                    }
+                    BackgroundTask::InstallOllama => {
+                        super::ai::local_provider::install_ollama()
+                    }
+                    BackgroundTask::StartOllama => {
+                        super::ai::local_provider::start_ollama_service()
                     }
                 };
 

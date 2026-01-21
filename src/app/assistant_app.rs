@@ -7,6 +7,7 @@ use super::constants::messages;
 use super::guides::GuideRegistry;
 use super::ui;
 use super::ai::local_provider::LocalAi;
+use super::desktop::{DesktopEnvironment, DeStyles};
 use eframe::egui;
 use std::sync::{mpsc, Arc, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -36,10 +37,15 @@ pub struct AssistantApp {
     pub dialog: DialogState,
     pub input_history: InputHistory,
     pub ollama_online: Arc<AtomicBool>,
+    pub ollama_installed: Arc<AtomicBool>,
     pub yay_installed: Arc<AtomicBool>,
     pub custom_model_exists: Arc<AtomicBool>,
     pub app_installed: Arc<AtomicBool>,
     last_ollama_check: Instant,
+
+    // Окружение рабочего стола
+    pub desktop_env: DesktopEnvironment,
+    pub de_styles: DeStyles,
 
     // Фоновые задачи
     pub tasks: TaskManager,
@@ -50,6 +56,10 @@ impl AssistantApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         let (tasks, task_receiver) = TaskManager::new();
         let config = Config::load();
+
+        // Определяем окружение рабочего стола
+        let desktop_env = DesktopEnvironment::detect();
+        let de_styles = DeStyles::for_de(desktop_env);
 
         let mut chat = ChatHistory::default();
         chat.add_message(&config.assistant_name, messages::WELCOME);
@@ -63,6 +73,14 @@ impl AssistantApp {
         tokio::spawn(async move {
             let status = super::ai::local_provider::check_ollama_status().await;
             ollama_online_clone.store(status, Ordering::SeqCst);
+        });
+
+        // Проверяем, установлена ли Ollama
+        let ollama_installed = Arc::new(AtomicBool::new(false));
+        let ollama_installed_clone = ollama_installed.clone();
+        std::thread::spawn(move || {
+            let status = super::ai::local_provider::is_ollama_installed();
+            ollama_installed_clone.store(status, Ordering::SeqCst);
         });
 
         // Запускаем проверку yay в фоне (чтобы не блокировать UI)
@@ -94,10 +112,13 @@ impl AssistantApp {
             dialog: DialogState::new(),
             input_history: InputHistory::new(),
             ollama_online,
+            ollama_installed,
             yay_installed,
             custom_model_exists,
             app_installed,
             last_ollama_check: Instant::now(),
+            desktop_env,
+            de_styles,
             tasks,
             task_receiver,
         }
@@ -232,10 +253,14 @@ impl eframe::App for AssistantApp {
         self.check_tasks();
         self.check_ollama_periodic();
 
-        // Стили
+        // Стили адаптированные под DE
         let mut style = (*ctx.style()).clone();
-        style.spacing.item_spacing = egui::vec2(12.0, 12.0);
-        style.visuals.widgets.inactive.rounding = 12.0.into();
+        style.spacing.item_spacing = egui::vec2(self.de_styles.spacing, self.de_styles.spacing);
+        style.visuals.widgets.inactive.rounding = self.de_styles.rounding.into();
+        style.visuals.widgets.active.rounding = self.de_styles.rounding.into();
+        style.visuals.widgets.hovered.rounding = self.de_styles.rounding.into();
+        style.visuals.widgets.noninteractive.rounding = self.de_styles.rounding.into();
+        style.visuals.window_rounding = self.de_styles.rounding.into();
         ctx.set_style(style);
 
         ui::render(ctx, self);
