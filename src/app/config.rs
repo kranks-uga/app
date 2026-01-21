@@ -32,11 +32,10 @@ impl Config {
         confy::load(CONFIG_APP_NAME, "config").unwrap_or_default()
     }
 
-    /// Сохраняет на диск
-    pub fn save(&self) {
-        if let Err(e) = confy::store(CONFIG_APP_NAME, "config", self) {
-            eprintln!("Ошибка сохранения: {}", e);
-        }
+    /// Сохраняет на диск. Возвращает Ok(()) при успехе или сообщение об ошибке.
+    pub fn save(&self) -> Result<(), String> {
+        confy::store(CONFIG_APP_NAME, "config", self)
+            .map_err(|e| format!("Не удалось сохранить настройки: {}", e))
     }
 
     /// Конвертация для egui

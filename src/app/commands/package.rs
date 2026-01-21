@@ -86,35 +86,41 @@ pub fn search_packages(query: &str) -> String {
 }
 
 /// Установка пакета
+/// yay сам запросит sudo при необходимости, pkexec не нужен
 pub fn install_package(package: &str) -> String {
-    match Command::new("pkexec")
-        .args(["yay", "-S", "--noconfirm", package])
+    match Command::new("yay")
+        .args(["-S", "--noconfirm", package])
         .status()
     {
         Ok(s) if s.success() => format!("[OK] Пакет '{}' установлен.", package),
-        _ => format!("[X] Не удалось установить '{}'.", package),
+        Ok(s) => format!("[X] Не удалось установить '{}' (код: {:?}).", package, s.code()),
+        Err(e) => format!("[X] Ошибка запуска yay: {}", e),
     }
 }
 
 /// Удаление пакета
+/// yay сам запросит sudo при необходимости
 pub fn remove_package(package: &str) -> String {
-    match Command::new("pkexec")
-        .args(["yay", "-R", "--noconfirm", package])
+    match Command::new("yay")
+        .args(["-R", "--noconfirm", package])
         .status()
     {
         Ok(s) if s.success() => format!("[OK] Пакет '{}' удалён.", package),
-        _ => format!("[X] Не удалось удалить '{}'.", package),
+        Ok(s) => format!("[X] Не удалось удалить '{}' (код: {:?}).", package, s.code()),
+        Err(e) => format!("[X] Ошибка запуска yay: {}", e),
     }
 }
 
 /// Обновление системы
+/// yay сам запросит sudo при необходимости
 pub fn update_system() -> String {
-    match Command::new("pkexec")
-        .args(["yay", "-Syu", "--noconfirm"])
+    match Command::new("yay")
+        .args(["-Syu", "--noconfirm"])
         .status()
     {
         Ok(s) if s.success() => "[OK] Система обновлена!".into(),
-        _ => "[X] Ошибка при обновлении.".into(),
+        Ok(s) => format!("[X] Ошибка при обновлении (код: {:?}).", s.code()),
+        Err(e) => format!("[X] Ошибка запуска yay: {}", e),
     }
 }
 

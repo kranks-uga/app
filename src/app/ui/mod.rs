@@ -5,7 +5,6 @@ pub mod widgets;
 
 use super::AssistantApp;
 use super::chat::BackgroundTask;
-use super::commands::package::is_yay_installed;
 use super::constants::{APP_NAME, APP_VERSION, SETTINGS_PANEL_WIDTH, messages};
 use eframe::egui;
 use std::sync::atomic::Ordering;
@@ -101,6 +100,10 @@ fn render_settings(ctx: &egui::Context, app: &mut AssistantApp, accent: egui::Co
     egui::SidePanel::right("settings")
         .default_width(SETTINGS_PANEL_WIDTH)
         .show(ctx, |ui| {
+            // Добавляем прокрутку для всего содержимого
+            egui::ScrollArea::vertical()
+                .auto_shrink([false; 2])
+                .show(ui, |ui| {
             ui.add_space(20.0);
             ui.heading("Настройки");
             ui.separator();
@@ -151,6 +154,44 @@ fn render_settings(ctx: &egui::Context, app: &mut AssistantApp, accent: egui::Co
                 });
             }
 
+            // Кастомная модель
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(5.0);
+            ui.label(egui::RichText::new("Кастомная модель").strong());
+            ui.add_space(5.0);
+
+            let model_exists = app.custom_model_exists.load(Ordering::SeqCst);
+            if model_exists {
+                ui.label(egui::RichText::new("[OK] Модель 'alfons' готова").color(egui::Color32::LIGHT_GREEN));
+                ui.add_space(3.0);
+                if ui.button("Использовать alfons").clicked() {
+                    app.config.ollama_model = "alfons".to_string();
+                    app.ai.set_model("alfons");
+                    changed = true;
+                }
+            } else {
+                ui.label(egui::RichText::new("Модель 'alfons' не создана").color(egui::Color32::GRAY));
+                ui.add_space(3.0);
+                ui.label(egui::RichText::new("Создаёт модель с оптимизированным промптом").weak().small());
+                ui.add_space(3.0);
+                if ui.button(egui::RichText::new("Создать модель alfons").color(accent)).clicked() {
+                    app.tasks.execute(BackgroundTask::CreateCustomModel);
+                    app.chat.add_message("Система", messages::MODEL_CREATING);
+                    // Обновим статус после создания
+                    let custom_model_exists = app.custom_model_exists.clone();
+                    let ai = app.ai.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_secs(5));
+                        let exists = super::ai::local_provider::is_custom_model_exists();
+                        custom_model_exists.store(exists, Ordering::SeqCst);
+                        if exists {
+                            ai.set_model("alfons");
+                        }
+                    });
+                }
+            }
+
             // Чат
             ui.add_space(20.0);
             ui.separator();
@@ -170,7 +211,7 @@ fn render_settings(ctx: &egui::Context, app: &mut AssistantApp, accent: egui::Co
             ui.label(egui::RichText::new("Пакетный менеджер").strong());
             ui.add_space(5.0);
 
-            let yay_ok = is_yay_installed();
+            let yay_ok = app.yay_installed.load(Ordering::SeqCst);
 
             if yay_ok {
                 ui.label(egui::RichText::new("[OK] yay установлен").color(egui::Color32::LIGHT_GREEN));
@@ -181,7 +222,12 @@ fn render_settings(ctx: &egui::Context, app: &mut AssistantApp, accent: egui::Co
             ui.add_space(5.0);
             ui.horizontal(|ui| {
                 if ui.button("Проверить").clicked() {
-                    app.tasks.execute(BackgroundTask::CheckYay);
+                    // Обновляем кэш в фоне
+                    let yay_installed = app.yay_installed.clone();
+                    std::thread::spawn(move || {
+                        let status = super::commands::package::is_yay_installed();
+                        yay_installed.store(status, Ordering::SeqCst);
+                    });
                 }
                 if !yay_ok && ui.button(egui::RichText::new("Установить yay").color(accent)).clicked() {
                     app.tasks.execute(BackgroundTask::InstallYay);
@@ -208,9 +254,61 @@ fn render_settings(ctx: &egui::Context, app: &mut AssistantApp, accent: egui::Co
             ui.label(format!("{} — помощник для Arch Linux", APP_NAME));
             ui.label(egui::RichText::new(format!("v{}", APP_VERSION)).weak());
 
-            if changed {
-                app.config.save();
+            // Установка в систему
+            ui.add_space(20.0);
+            ui.separator();
+            ui.add_space(10.0);
+            ui.label(egui::RichText::new("Установка").strong());
+            ui.add_space(5.0);
+
+            let is_installed = app.app_installed.load(Ordering::SeqCst);
+            if is_installed {
+                ui.label(egui::RichText::new("[OK] Установлено в систему").color(egui::Color32::LIGHT_GREEN));
+                if let Some(path) = super::installer::get_installed_path() {
+                    ui.label(egui::RichText::new(format!("{}", path.display())).weak().small());
+                }
+                ui.add_space(5.0);
+                if ui.button(egui::RichText::new("Удалить из системы").color(egui::Color32::LIGHT_RED)).clicked() {
+                    app.tasks.execute(BackgroundTask::UninstallFromSystem);
+                    // Обновим статус после удаления
+                    let app_installed = app.app_installed.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                        app_installed.store(super::installer::is_installed(), Ordering::SeqCst);
+                    });
+                }
+            } else {
+                ui.label(egui::RichText::new("Не установлено").color(egui::Color32::GRAY));
+                ui.add_space(3.0);
+                ui.label(egui::RichText::new("Добавит ярлык в меню приложений").weak().small());
+                ui.add_space(5.0);
+                if ui.button(egui::RichText::new("Установить в систему").color(accent)).clicked() {
+                    app.tasks.execute(BackgroundTask::InstallToSystem);
+                    // Обновим статус после установки
+                    let app_installed = app.app_installed.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                        app_installed.store(super::installer::is_installed(), Ordering::SeqCst);
+                    });
+                }
+
+                // Проверяем PATH
+                if !super::installer::is_local_bin_in_path() {
+                    ui.add_space(5.0);
+                    ui.label(egui::RichText::new("~/.local/bin не в PATH").color(egui::Color32::YELLOW).small());
+                    ui.label(egui::RichText::new("Добавьте в .bashrc/.zshrc:").weak().small());
+                    ui.label(egui::RichText::new(super::installer::get_path_export_command()).weak().small().monospace());
+                }
             }
+
+            if changed {
+                if let Err(e) = app.config.save() {
+                    app.chat.add_message("Система", &e);
+                }
+            }
+
+            ui.add_space(20.0);
+            }); // конец ScrollArea
         });
 }
 
@@ -248,6 +346,11 @@ fn render_input(ctx: &egui::Context, app: &mut AssistantApp, accent: egui::Color
                         .margin(egui::vec2(15.0, 11.0))
                         .hint_text("Введите команду..."),
                 );
+
+                // Сбрасываем позицию истории при ручном вводе текста
+                if input.changed() {
+                    app.input_history.reset();
+                }
 
                 // История команд (стрелки)
                 if input.has_focus() {

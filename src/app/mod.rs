@@ -10,6 +10,7 @@
 //! - `ai` — интеграция с Ollama
 //! - `ui` — графический интерфейс
 //! - `assistant_app` — главная структура приложения
+//! - `installer` — установка в систему
 
 pub mod constants;     // Константы и строки
 pub mod config;        // Настройки пользователя
@@ -20,5 +21,6 @@ pub mod ai;            // Локальный ИИ (Ollama)
 pub mod ui;            // Графический интерфейс
 pub mod assistant_app; // Главная структура
 pub mod command_log;   // Логирование команд
+pub mod installer;     // Установка в систему
 
 pub use assistant_app::AssistantApp;

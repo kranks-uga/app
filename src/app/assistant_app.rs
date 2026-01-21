@@ -8,8 +8,19 @@ use super::guides::GuideRegistry;
 use super::ui;
 use super::ai::local_provider::LocalAi;
 use eframe::egui;
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
+use regex::Regex;
+
+/// Интервал проверки статуса Ollama (в секундах)
+const OLLAMA_CHECK_INTERVAL: u64 = 30;
+
+/// Статический Regex для парсинга [CMD:...] маркеров
+fn cmd_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\[CMD:([^\]]+)\]").expect("Invalid CMD regex"))
+}
 
 /// Центральное хранилище состояния приложения
 pub struct AssistantApp {
@@ -25,6 +36,10 @@ pub struct AssistantApp {
     pub dialog: DialogState,
     pub input_history: InputHistory,
     pub ollama_online: Arc<AtomicBool>,
+    pub yay_installed: Arc<AtomicBool>,
+    pub custom_model_exists: Arc<AtomicBool>,
+    pub app_installed: Arc<AtomicBool>,
+    last_ollama_check: Instant,
 
     // Фоновые задачи
     pub tasks: TaskManager,
@@ -42,13 +57,32 @@ impl AssistantApp {
         let ai = Arc::new(LocalAi::new());
         ai.set_model(&config.ollama_model);
 
-        // Запускаем проверку статуса Ollama
+        // Запускаем проверку статуса Ollama в фоне
         let ollama_online = Arc::new(AtomicBool::new(false));
         let ollama_online_clone = ollama_online.clone();
         tokio::spawn(async move {
             let status = super::ai::local_provider::check_ollama_status().await;
             ollama_online_clone.store(status, Ordering::SeqCst);
         });
+
+        // Запускаем проверку yay в фоне (чтобы не блокировать UI)
+        let yay_installed = Arc::new(AtomicBool::new(false));
+        let yay_installed_clone = yay_installed.clone();
+        std::thread::spawn(move || {
+            let status = super::commands::package::is_yay_installed();
+            yay_installed_clone.store(status, Ordering::SeqCst);
+        });
+
+        // Проверяем существование кастомной модели
+        let custom_model_exists = Arc::new(AtomicBool::new(false));
+        let custom_model_clone = custom_model_exists.clone();
+        std::thread::spawn(move || {
+            let exists = super::ai::local_provider::is_custom_model_exists();
+            custom_model_clone.store(exists, Ordering::SeqCst);
+        });
+
+        // Проверяем, установлено ли приложение в систему
+        let app_installed = Arc::new(AtomicBool::new(super::installer::is_installed()));
 
         Self {
             config,
@@ -60,8 +94,24 @@ impl AssistantApp {
             dialog: DialogState::new(),
             input_history: InputHistory::new(),
             ollama_online,
+            yay_installed,
+            custom_model_exists,
+            app_installed,
+            last_ollama_check: Instant::now(),
             tasks,
             task_receiver,
+        }
+    }
+
+    /// Периодическая проверка статуса Ollama
+    fn check_ollama_periodic(&mut self) {
+        if self.last_ollama_check.elapsed() >= Duration::from_secs(OLLAMA_CHECK_INTERVAL) {
+            self.last_ollama_check = Instant::now();
+            let ollama_online = self.ollama_online.clone();
+            tokio::spawn(async move {
+                let status = super::ai::local_provider::check_ollama_status().await;
+                ollama_online.store(status, Ordering::SeqCst);
+            });
         }
     }
 
@@ -130,9 +180,7 @@ impl AssistantApp {
 
     /// Обрабатывает маркеры [CMD:...] в ответе AI и выполняет команды
     fn process_ai_commands(&mut self, text: &str) -> String {
-        use regex::Regex;
-
-        let cmd_re = Regex::new(r"\[CMD:([^\]]+)\]").unwrap();
+        let cmd_re = cmd_regex();
         let mut result = text.to_string();
 
         // Находим все команды в тексте
@@ -182,6 +230,7 @@ impl AssistantApp {
 impl eframe::App for AssistantApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.check_tasks();
+        self.check_ollama_periodic();
 
         // Стили
         let mut style = (*ctx.style()).clone();

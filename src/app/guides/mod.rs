@@ -61,7 +61,7 @@ impl Guide {
 
     /// Форматирует гайд для вывода в чат
     pub fn format(&self) -> String {
-        let mut output = format!("📖 {}\n{}\n\n", self.title, self.description);
+        let mut output = format!(" {}\n{}\n\n", self.title, self.description);
 
         for (i, step) in self.steps.iter().enumerate() {
             output.push_str(&format!("{}. {}\n", i + 1, step.instruction));
@@ -71,7 +71,7 @@ impl Guide {
             }
 
             if let Some(note) = &step.note {
-                output.push_str(&format!("   ℹ️ {}\n", note));
+                output.push_str(&format!("   ℹ {}\n", note));
             }
             output.push('\n');
         }

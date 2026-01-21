@@ -11,7 +11,9 @@ pub const DEFAULT_ACCENT_COLOR: [u8; 3] = [61, 174, 233]; // Голубой
 
 // === Ollama AI ===
 pub const OLLAMA_URL: &str = "http://localhost:11434/api/generate";
+pub const OLLAMA_API_BASE: &str = "http://localhost:11434/api";
 pub const OLLAMA_MODEL: &str = "llama3";
+pub const OLLAMA_CUSTOM_MODEL: &str = "alfons";
 pub const OLLAMA_TIMEOUT_SECS: u64 = 60;
 
 // === Пути ===
@@ -35,6 +37,9 @@ pub mod messages {
     pub const YAY_INSTALLING: &str = "Начинаю установку yay... Это может занять некоторое время.";
     pub const YAY_INSTALLED: &str = "yay успешно установлен! Теперь вы можете управлять пакетами.";
     pub const YAY_ALREADY: &str = "yay уже установлен!";
+    pub const MODEL_CREATING: &str = "Создаю кастомную модель 'alfons'... Это может занять несколько минут.";
+    pub const MODEL_CREATED: &str = "[OK] Модель 'alfons' создана! Переключаю на неё.";
+    pub const MODEL_EXISTS: &str = "Модель 'alfons' уже существует.";
 }
 
 // === Ошибки ===
@@ -45,4 +50,6 @@ pub mod errors {
     pub const YAY_DEPS_FAILED: &str = "Не удалось установить зависимости (git, base-devel).";
     pub const YAY_CLONE_FAILED: &str = "Не удалось клонировать репозиторий yay из AUR.";
     pub const YAY_BUILD_FAILED: &str = "Ошибка при сборке yay. Попробуйте установить вручную.";
+    pub const MODEL_CREATE_FAILED: &str = "[X] Не удалось создать модель. Проверьте, что Ollama запущена и llama3 загружена.";
+    pub const MODEL_BASE_NOT_FOUND: &str = "[X] Базовая модель llama3 не найдена. Выполните: ollama pull llama3";
 }

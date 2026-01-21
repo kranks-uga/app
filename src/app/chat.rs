@@ -1,5 +1,6 @@
 //! Модуль чата и фоновых задач
 
+use std::collections::VecDeque;
 use std::sync::mpsc::{self, Sender, Receiver};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -77,6 +78,9 @@ pub enum BackgroundTask {
     InstallYay,
     ShutdownSystem,
     RebootSystem,
+    CreateCustomModel,
+    InstallToSystem,
+    UninstallFromSystem,
 }
 
 // ============================================================================
@@ -93,29 +97,29 @@ pub struct ChatMessage {
 
 /// Управление историей чата
 pub struct ChatHistory {
-    messages: Vec<ChatMessage>,
+    messages: VecDeque<ChatMessage>,
     max_messages: usize,
 }
 
 impl ChatHistory {
     pub fn new(max_messages: usize) -> Self {
         Self {
-            messages: Vec::with_capacity(max_messages),
+            messages: VecDeque::with_capacity(max_messages),
             max_messages,
         }
     }
 
     /// Добавляет сообщение в историю
     pub fn add_message(&mut self, sender: impl Into<String>, text: impl Into<String>) {
-        self.messages.push(ChatMessage {
+        self.messages.push_back(ChatMessage {
             sender: sender.into(),
             text: text.into(),
             timestamp: Local::now(),
         });
 
-        // Удаляем старые сообщения при превышении лимита
+        // Удаляем старые сообщения при превышении лимита (O(1) для VecDeque)
         if self.messages.len() > self.max_messages {
-            self.messages.remove(0);
+            self.messages.pop_front();
         }
     }
 
@@ -124,9 +128,9 @@ impl ChatHistory {
         self.messages.clear();
     }
 
-    /// Возвращает все сообщения
-    pub fn messages(&self) -> &[ChatMessage] {
-        &self.messages
+    /// Возвращает итератор по сообщениям
+    pub fn messages(&self) -> impl Iterator<Item = &ChatMessage> {
+        self.messages.iter()
     }
 }
 
@@ -185,6 +189,17 @@ impl TaskManager {
                     BackgroundTask::RebootSystem => {
                         super::commands::system::execute_reboot()
                     }
+                    BackgroundTask::CreateCustomModel => {
+                        super::ai::local_provider::create_custom_model()
+                    }
+                    BackgroundTask::InstallToSystem => {
+                        let result = super::installer::install();
+                        result.message
+                    }
+                    BackgroundTask::UninstallFromSystem => {
+                        let result = super::installer::uninstall();
+                        result.message
+                    }
                 };
 
                 let _ = result_sender_clone.send(result);
@@ -204,8 +219,11 @@ impl TaskManager {
 
     /// Запускает фоновую задачу
     pub fn execute(&self, task: BackgroundTask) {
-        if self.task_sender.send(task).is_ok() {
-            self.is_processing.store(true, Ordering::SeqCst);
+        // Устанавливаем флаг ДО отправки, чтобы избежать гонки
+        self.is_processing.store(true, Ordering::SeqCst);
+        if self.task_sender.send(task).is_err() {
+            // Если отправка не удалась, сбрасываем флаг
+            self.is_processing.store(false, Ordering::SeqCst);
         }
     }
 
