@@ -26,13 +26,6 @@ cd app
 sudo pacman -S rustup
 rustup default stable
 
-# Установить Ollama и загрузить модель
-curl -fsSL https://ollama.com/install.sh | sh
-ollama pull llama3
-
-# Запустить Ollama
-ollama serve
-
 # Собрать и запустить
 cargo run --release
 ```
