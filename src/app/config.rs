@@ -1,7 +1,9 @@
 //! Конфигурация пользователя
 
+use super::constants::{
+    CONFIG_APP_NAME, DEFAULT_ACCENT_COLOR, DEFAULT_ASSISTANT_NAME, OLLAMA_MODEL,
+};
 use serde::{Deserialize, Serialize};
-use super::constants::{CONFIG_APP_NAME, DEFAULT_ASSISTANT_NAME, DEFAULT_ACCENT_COLOR, OLLAMA_MODEL};
 
 /// Настройки приложения (сохраняются на диск)
 #[derive(Serialize, Deserialize, Clone)]

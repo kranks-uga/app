@@ -28,7 +28,11 @@ pub fn process_guide_command(cmd: &str, guides: &GuideRegistry) -> Option<String
         } else if results.len() == 1 {
             return Some(results[0].format());
         } else {
-            let mut output = format!("Найдено {} гайдов по запросу '{}':\n\n", results.len(), guide_id);
+            let mut output = format!(
+                "Найдено {} гайдов по запросу '{}':\n\n",
+                results.len(),
+                guide_id
+            );
             for guide in results {
                 output.push_str(&format!("• {} — {}\n", guide.id, guide.title));
             }

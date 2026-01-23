@@ -25,43 +25,49 @@ impl ToolRegistry {
         };
 
         // Регистрируем базовые инструменты
-        registry.register("время", "получить текущее время", || {
-            Local::now().format("%H:%M:%S").to_string()
-        });
+        registry.register(
+            "время",
+            "получить текущее время",
+            || Local::now().format("%H:%M:%S").to_string(),
+        );
 
-        registry.register("дата", "получить текущую дату", || {
-            Local::now().format("%d.%m.%Y").to_string()
-        });
+        registry.register(
+            "дата",
+            "получить текущую дату",
+            || Local::now().format("%d.%m.%Y").to_string(),
+        );
 
-        registry.register("дата_и_время", "получить дату и время", || {
-            Local::now().format("%d.%m.%Y %H:%M:%S").to_string()
-        });
+        registry.register(
+            "дата_и_время",
+            "получить дату и время",
+            || Local::now().format("%d.%m.%Y %H:%M:%S").to_string(),
+        );
 
-        registry.register("список_гайдов", "показать доступные обучающие гайды", || {
-            "pacman, aur, wifi, systemd, gpu, audio, locale, backup".to_string()
-        });
+        registry.register(
+            "список_гайдов",
+            "показать доступные обучающие гайды",
+            || "pacman, aur, wifi, systemd, gpu, audio, locale, backup".to_string(),
+        );
 
         // Системная информация
-        registry.register("память", "показать использование RAM", || {
-            get_memory_info()
-        });
+        registry.register("память", "показать использование RAM", get_memory_info);
 
-        registry.register("диск", "показать использование дисков", || {
-            get_disk_info()
-        });
+        registry.register("диск", "показать использование дисков", get_disk_info);
 
-        registry.register("cpu", "показать информацию о процессоре", || {
-            get_cpu_info()
-        });
+        registry.register("cpu", "показать информацию о процессоре", get_cpu_info);
 
-        registry.register("система", "показать общую информацию о системе", || {
-            format!(
-                "Память: {}\nCPU: {}\nДиск: {}",
-                get_memory_info(),
-                get_cpu_info(),
-                get_disk_info()
-            )
-        });
+        registry.register(
+            "система",
+            "показать общую информацию о системе",
+            || {
+                format!(
+                    "Память: {}\nCPU: {}\nДиск: {}",
+                    get_memory_info(),
+                    get_cpu_info(),
+                    get_disk_info()
+                )
+            },
+        );
 
         registry
     }
@@ -91,7 +97,7 @@ impl ToolRegistry {
         }
 
         format!(
-r#"Ты помощник Альфонс для Arch Linux. Отвечай кратко и по делу на русском языке.
+            r#"Ты помощник Альфонс для Arch Linux. Отвечай кратко и по делу на русском языке.
 
 ДОСТУПНЫЕ ИНСТРУМЕНТЫ:
 {}
@@ -156,9 +162,7 @@ impl Default for ToolRegistry {
 
 /// Получает информацию об использовании памяти
 fn get_memory_info() -> String {
-    let output = Command::new("free")
-        .args(["-h", "--si"])
-        .output();
+    let output = Command::new("free").args(["-h", "--si"]).output();
 
     match output {
         Ok(out) => {
@@ -178,9 +182,7 @@ fn get_memory_info() -> String {
 
 /// Получает информацию об использовании дисков
 fn get_disk_info() -> String {
-    let output = Command::new("df")
-        .args(["-h", "/"])
-        .output();
+    let output = Command::new("df").args(["-h", "/"]).output();
 
     match output {
         Ok(out) => {

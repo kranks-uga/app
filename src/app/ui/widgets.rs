@@ -57,10 +57,14 @@ pub fn render_message(ui: &mut egui::Ui, msg: &ChatMessage, accent: egui::Color3
                             .color(name_color)
                             .size(12.0),
                     );
-                    ui.add_space(10.0);
+                    ui.label(
+                        egui::RichText::new(" · ")
+                            .weak()
+                            .size(10.0),
+                    );
                     ui.label(
                         egui::RichText::new(msg.timestamp.format("%H:%M").to_string())
-                            .weak()
+                            .color(egui::Color32::GRAY)
                             .size(10.0),
                     );
                 });

@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Путь установки бинарника
@@ -14,9 +14,7 @@ const ICON_PATH: &str = ".local/share/icons/alfons.png";
 
 /// Результат установки
 pub struct InstallResult {
-    pub success: bool,
     pub message: String,
-    pub bin_path: Option<PathBuf>,
 }
 
 /// Проверяет, установлено ли приложение
@@ -39,21 +37,21 @@ pub fn get_installed_path() -> Option<PathBuf> {
 pub fn install() -> InstallResult {
     let home = match dirs::home_dir() {
         Some(h) => h,
-        None => return InstallResult {
-            success: false,
-            message: "[X] Не удалось определить домашнюю директорию".into(),
-            bin_path: None,
-        },
+        None => {
+            return InstallResult {
+                message: "[X] Не удалось определить домашнюю директорию".into(),
+            }
+        }
     };
 
     // Находим текущий бинарник
     let current_exe = match std::env::current_exe() {
         Ok(p) => p,
-        Err(e) => return InstallResult {
-            success: false,
-            message: format!("[X] Не удалось найти исполняемый файл: {}", e),
-            bin_path: None,
-        },
+        Err(e) => {
+            return InstallResult {
+                message: format!("[X] Не удалось найти исполняемый файл: {}", e),
+            }
+        }
     };
 
     // Создаём директории
@@ -64,9 +62,7 @@ pub fn install() -> InstallResult {
     for dir in [&bin_dir, &desktop_dir, &icon_dir] {
         if let Err(e) = fs::create_dir_all(dir) {
             return InstallResult {
-                success: false,
                 message: format!("[X] Не удалось создать директорию: {}", e),
-                bin_path: None,
             };
         }
     }
@@ -75,18 +71,14 @@ pub fn install() -> InstallResult {
     let bin_path = home.join(INSTALL_BIN_PATH);
     if let Err(e) = fs::copy(&current_exe, &bin_path) {
         return InstallResult {
-            success: false,
             message: format!("[X] Не удалось скопировать бинарник: {}", e),
-            bin_path: None,
         };
     }
 
     // Устанавливаем права на исполнение
     if let Err(e) = fs::set_permissions(&bin_path, fs::Permissions::from_mode(0o755)) {
         return InstallResult {
-            success: false,
             message: format!("[X] Не удалось установить права: {}", e),
-            bin_path: None,
         };
     }
 
@@ -111,9 +103,7 @@ pub fn install() -> InstallResult {
     let desktop_content = generate_desktop_file(&bin_path, &icon_path);
     if let Err(e) = fs::write(&desktop_path, desktop_content) {
         return InstallResult {
-            success: false,
             message: format!("[X] Не удалось создать .desktop файл: {}", e),
-            bin_path: None,
         };
     }
 
@@ -123,7 +113,6 @@ pub fn install() -> InstallResult {
         .output();
 
     InstallResult {
-        success: true,
         message: format!(
             "[OK] Альфонс установлен!\n\
              Бинарник: {}\n\
@@ -131,7 +120,6 @@ pub fn install() -> InstallResult {
              Перезапустите меню или выполните: update-desktop-database",
             bin_path.display()
         ),
-        bin_path: Some(bin_path),
     }
 }
 
@@ -139,11 +127,11 @@ pub fn install() -> InstallResult {
 pub fn uninstall() -> InstallResult {
     let home = match dirs::home_dir() {
         Some(h) => h,
-        None => return InstallResult {
-            success: false,
-            message: "[X] Не удалось определить домашнюю директорию".into(),
-            bin_path: None,
-        },
+        None => {
+            return InstallResult {
+                message: "[X] Не удалось определить домашнюю директорию".into(),
+            }
+        }
     };
 
     let bin_path = home.join(INSTALL_BIN_PATH);
@@ -173,15 +161,11 @@ pub fn uninstall() -> InstallResult {
 
     if errors.is_empty() {
         InstallResult {
-            success: true,
             message: "[OK] Альфонс удалён из системы".into(),
-            bin_path: None,
         }
     } else {
         InstallResult {
-            success: false,
             message: format!("[X] Ошибки при удалении: {}", errors.join(", ")),
-            bin_path: None,
         }
     }
 }
@@ -240,9 +224,9 @@ fn find_custom_icon() -> Option<PathBuf> {
 }
 
 /// Генерирует содержимое .desktop файла
-fn generate_desktop_file(bin_path: &PathBuf, icon_path: &PathBuf) -> String {
+fn generate_desktop_file(bin_path: &Path, icon_path: &Path) -> String {
     format!(
-r#"[Desktop Entry]
+        r#"[Desktop Entry]
 Name=Альфонс
 GenericName=AI Assistant
 Comment=Помощник для Arch Linux с AI интеграцией
@@ -279,7 +263,7 @@ fn generate_icon_svg() -> &'static str {
 pub fn is_local_bin_in_path() -> bool {
     if let (Some(home), Ok(path)) = (dirs::home_dir(), std::env::var("PATH")) {
         let local_bin = home.join(".local/bin");
-        path.split(':').any(|p| PathBuf::from(p) == local_bin)
+        path.split(':').any(|p| local_bin == Path::new(p))
     } else {
         false
     }

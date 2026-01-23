@@ -1,12 +1,12 @@
 //! Модуль чата и фоновых задач
 
-use std::collections::VecDeque;
-use std::sync::mpsc::{self, Sender, Receiver};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
-use chrono::{Local, DateTime};
 use super::constants::MAX_CHAT_MESSAGES;
+use chrono::{DateTime, Local};
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
+use std::thread;
 
 // ============================================================================
 // Диалоги
@@ -74,7 +74,6 @@ pub enum BackgroundTask {
     InstallPackage(String),
     RemovePackage(String),
     UpdateSystem,
-    CheckYay,
     InstallYay,
     ShutdownSystem,
     RebootSystem,
@@ -176,21 +175,10 @@ impl TaskManager {
                     BackgroundTask::RemovePackage(package) => {
                         super::commands::package::remove_package(&package)
                     }
-                    BackgroundTask::UpdateSystem => {
-                        super::commands::package::update_system()
-                    }
-                    BackgroundTask::CheckYay => {
-                        super::commands::package::check_yay_installed()
-                    }
-                    BackgroundTask::InstallYay => {
-                        super::commands::package::install_yay()
-                    }
-                    BackgroundTask::ShutdownSystem => {
-                        super::commands::system::execute_shutdown()
-                    }
-                    BackgroundTask::RebootSystem => {
-                        super::commands::system::execute_reboot()
-                    }
+                    BackgroundTask::UpdateSystem => super::commands::package::update_system(),
+                    BackgroundTask::InstallYay => super::commands::package::install_yay(),
+                    BackgroundTask::ShutdownSystem => super::commands::system::execute_shutdown(),
+                    BackgroundTask::RebootSystem => super::commands::system::execute_reboot(),
                     BackgroundTask::CreateCustomModel => {
                         super::ai::local_provider::create_custom_model()
                     }
@@ -202,9 +190,7 @@ impl TaskManager {
                         let result = super::installer::uninstall();
                         result.message
                     }
-                    BackgroundTask::InstallOllama => {
-                        super::ai::local_provider::install_ollama()
-                    }
+                    BackgroundTask::InstallOllama => super::ai::local_provider::install_ollama(),
                     BackgroundTask::StartOllama => {
                         super::ai::local_provider::start_ollama_service()
                     }

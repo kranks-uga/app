@@ -1,13 +1,13 @@
 //! Обработка команд пользователя
 
 pub mod base;
-pub mod system;
-pub mod package;
 pub mod guide;
+pub mod package;
+pub mod system;
 
 use super::chat::{DialogState, TaskManager};
-use super::guides::GuideRegistry;
 use super::command_log;
+use super::guides::GuideRegistry;
 
 /// Обрабатывает команду и возвращает ответ
 ///

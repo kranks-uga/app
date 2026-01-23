@@ -18,7 +18,8 @@ impl DesktopEnvironment {
         // Проверяем XDG_CURRENT_DESKTOP
         if let Ok(desktop) = env::var("XDG_CURRENT_DESKTOP") {
             let desktop = desktop.to_lowercase();
-            if desktop.contains("gnome") || desktop.contains("unity") || desktop.contains("budgie") {
+            if desktop.contains("gnome") || desktop.contains("unity") || desktop.contains("budgie")
+            {
                 return Self::Gnome;
             }
             if desktop.contains("kde") || desktop.contains("plasma") {
@@ -71,23 +72,13 @@ impl DesktopEnvironment {
         match self {
             Self::Gnome => vec![
                 "gnome-terminal",
-                "kgx",           // GNOME Console
+                "kgx", // GNOME Console
                 "alacritty",
                 "kitty",
                 "xterm",
             ],
-            Self::Kde => vec![
-                "konsole",
-                "alacritty",
-                "kitty",
-                "xterm",
-            ],
-            Self::Xfce => vec![
-                "xfce4-terminal",
-                "alacritty",
-                "kitty",
-                "xterm",
-            ],
+            Self::Kde => vec!["konsole", "alacritty", "kitty", "xterm"],
+            Self::Xfce => vec!["xfce4-terminal", "alacritty", "kitty", "xterm"],
             Self::Other => vec![
                 "alacritty",
                 "kitty",
@@ -114,7 +105,6 @@ impl DesktopEnvironment {
 pub struct DeStyles {
     pub rounding: f32,
     pub spacing: f32,
-    pub button_padding: f32,
 }
 
 impl DeStyles {
@@ -122,35 +112,21 @@ impl DeStyles {
     pub fn for_de(de: DesktopEnvironment) -> Self {
         match de {
             DesktopEnvironment::Gnome => Self {
-                rounding: 12.0,      // GNOME использует более округлые формы
+                rounding: 12.0, // GNOME использует более округлые формы
                 spacing: 12.0,
-                button_padding: 12.0,
             },
             DesktopEnvironment::Kde => Self {
-                rounding: 6.0,       // KDE более строгий
+                rounding: 6.0, // KDE более строгий
                 spacing: 10.0,
-                button_padding: 10.0,
             },
             DesktopEnvironment::Xfce => Self {
-                rounding: 4.0,       // Xfce минималистичный
+                rounding: 4.0, // Xfce минималистичный
                 spacing: 8.0,
-                button_padding: 8.0,
             },
             DesktopEnvironment::Other => Self {
                 rounding: 8.0,
                 spacing: 10.0,
-                button_padding: 10.0,
             },
         }
-    }
-}
-
-/// Цвета по умолчанию для разных DE
-pub fn default_accent_color(de: DesktopEnvironment) -> [u8; 3] {
-    match de {
-        DesktopEnvironment::Gnome => [53, 132, 228],   // GNOME синий
-        DesktopEnvironment::Kde => [61, 174, 233],     // KDE голубой
-        DesktopEnvironment::Xfce => [44, 137, 218],    // Xfce синий
-        DesktopEnvironment::Other => [61, 174, 233],   // По умолчанию
     }
 }

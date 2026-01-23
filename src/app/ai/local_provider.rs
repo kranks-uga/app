@@ -1,13 +1,16 @@
 //! Локальный AI через Ollama
 
-use reqwest::Client;
-use regex::Regex;
-use serde::{Deserialize, Serialize};
-use std::sync::{RwLock, OnceLock};
-use std::time::Duration;
-use std::process::Command;
 use super::tools::ToolRegistry;
-use crate::app::constants::{OLLAMA_URL, OLLAMA_MODEL, OLLAMA_CUSTOM_MODEL, OLLAMA_TIMEOUT_SECS, OLLAMA_INSTALL_SCRIPT, errors, messages};
+use crate::app::constants::{
+    errors, messages, OLLAMA_CUSTOM_MODEL, OLLAMA_INSTALL_SCRIPT, OLLAMA_MODEL,
+    OLLAMA_TIMEOUT_SECS, OLLAMA_URL,
+};
+use regex::Regex;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use std::process::Command;
+use std::sync::{OnceLock, RwLock};
+use std::time::Duration;
 
 /// Статический Regex для парсинга [TOOL:...] маркеров
 fn tool_regex() -> &'static Regex {
@@ -122,34 +125,6 @@ pub async fn check_ollama_status() -> bool {
         .unwrap_or(false)
 }
 
-/// Получает список доступных моделей Ollama
-pub async fn get_available_models() -> Vec<String> {
-    #[derive(Deserialize)]
-    struct ModelsResponse {
-        models: Vec<ModelInfo>,
-    }
-    #[derive(Deserialize)]
-    struct ModelInfo {
-        name: String,
-    }
-
-    let client = Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .unwrap_or_default();
-
-    match client.get("http://localhost:11434/api/tags").send().await {
-        Ok(resp) => {
-            if let Ok(data) = resp.json::<ModelsResponse>().await {
-                data.models.into_iter().map(|m| m.name).collect()
-            } else {
-                vec![]
-            }
-        }
-        Err(_) => vec![],
-    }
-}
-
 /// Проверяет, существует ли кастомная модель alfons
 pub fn is_custom_model_exists() -> bool {
     Command::new("ollama")
@@ -193,10 +168,7 @@ pub fn create_custom_model() -> String {
             .unwrap_or_default(),
     ];
 
-    let modelfile = modelfile_paths
-        .iter()
-        .find(|p| p.exists())
-        .cloned();
+    let modelfile = modelfile_paths.iter().find(|p| p.exists()).cloned();
 
     let modelfile = match modelfile {
         Some(path) => path,
@@ -223,9 +195,7 @@ pub fn create_custom_model() -> String {
         .arg(&modelfile)
         .output()
     {
-        Ok(output) if output.status.success() => {
-            messages::MODEL_CREATED.to_string()
-        }
+        Ok(output) if output.status.success() => messages::MODEL_CREATED.to_string(),
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
             format!("{} ({})", errors::MODEL_CREATE_FAILED, stderr.trim())
@@ -293,9 +263,7 @@ pub fn install_ollama() -> String {
         .output();
 
     match result {
-        Ok(output) if output.status.success() => {
-            messages::OLLAMA_INSTALLED.to_string()
-        }
+        Ok(output) if output.status.success() => messages::OLLAMA_INSTALLED.to_string(),
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
             format!("{} ({})", errors::OLLAMA_INSTALL_FAILED, stderr.trim())
@@ -314,10 +282,7 @@ pub fn start_ollama_service() -> String {
     }
 
     // Запускаем ollama serve в фоне
-    let result = Command::new("sh")
-        .arg("-c")
-        .arg("ollama serve &")
-        .spawn();
+    let result = Command::new("sh").arg("-c").arg("ollama serve &").spawn();
 
     match result {
         Ok(_) => {

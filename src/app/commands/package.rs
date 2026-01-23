@@ -1,9 +1,9 @@
 //! Команды управления пакетами (через yay)
 
-use std::process::Command;
 use crate::app::chat::{BackgroundTask, DialogState, TaskManager};
-use crate::app::constants::{YAY_INSTALL_DIR, YAY_AUR_URL, messages, errors};
+use crate::app::constants::{errors, messages, YAY_AUR_URL, YAY_INSTALL_DIR};
 use crate::app::desktop::DesktopEnvironment;
+use std::process::Command;
 
 /// Обработка команд пакетного менеджера
 pub fn process_package_command(
@@ -46,7 +46,11 @@ pub fn process_package_command(
     }
 
     // Обновление системы
-    if cmd == "обновить систему" || cmd == "обновить система" || cmd == "обновление" || cmd == "обновить" {
+    if cmd == "обновить систему"
+        || cmd == "обновить система"
+        || cmd == "обновление"
+        || cmd == "обновить"
+    {
         dialog.show_confirm(
             "Обновление системы",
             "Выполнить полное обновление (yay -Syu)?",
@@ -89,24 +93,60 @@ pub fn search_packages(query: &str) -> String {
 /// Установка пакета
 /// Запускаем в терминале для интерактивного sudo
 pub fn install_package(package: &str) -> String {
-    run_in_terminal(&format!("yay -S {}", package), &format!("Установка {}", package))
+    run_in_terminal(
+        &format!("yay -S {}", package),
+        &format!("Установка {}", package),
+    )
 }
 
 /// Удаление пакета
 /// Запускаем в терминале для интерактивного sudo
 pub fn remove_package(package: &str) -> String {
-    run_in_terminal(&format!("yay -R {}", package), &format!("Удаление {}", package))
+    run_in_terminal(
+        &format!("yay -R {}", package),
+        &format!("Удаление {}", package),
+    )
 }
 
 /// Возвращает аргументы для запуска команды в конкретном терминале
 fn get_terminal_args(term: &str, cmd: &str) -> Option<Vec<String>> {
     let args = match term {
-        "kitty" => vec!["--hold".to_string(), "-e".to_string(), "sh".to_string(), "-c".to_string(), cmd.to_string()],
-        "alacritty" => vec!["-e".to_string(), "sh".to_string(), "-c".to_string(), format!("{}; echo 'Нажмите Enter...'; read", cmd)],
-        "gnome-terminal" | "kgx" => vec!["--".to_string(), "sh".to_string(), "-c".to_string(), format!("{}; echo 'Нажмите Enter...'; read", cmd)],
-        "konsole" => vec!["-e".to_string(), "sh".to_string(), "-c".to_string(), format!("{}; echo 'Нажмите Enter...'; read", cmd)],
-        "xfce4-terminal" => vec!["-e".to_string(), format!("sh -c '{}; echo Нажмите Enter...; read'", cmd)],
-        "xterm" => vec!["-hold".to_string(), "-e".to_string(), "sh".to_string(), "-c".to_string(), cmd.to_string()],
+        "kitty" => vec![
+            "--hold".to_string(),
+            "-e".to_string(),
+            "sh".to_string(),
+            "-c".to_string(),
+            cmd.to_string(),
+        ],
+        "alacritty" => vec![
+            "-e".to_string(),
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("{}; echo 'Нажмите Enter...'; read", cmd),
+        ],
+        "gnome-terminal" | "kgx" => vec![
+            "--".to_string(),
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("{}; echo 'Нажмите Enter...'; read", cmd),
+        ],
+        "konsole" => vec![
+            "-e".to_string(),
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("{}; echo 'Нажмите Enter...'; read", cmd),
+        ],
+        "xfce4-terminal" => vec![
+            "-e".to_string(),
+            format!("sh -c '{}; echo Нажмите Enter...; read'", cmd),
+        ],
+        "xterm" => vec![
+            "-hold".to_string(),
+            "-e".to_string(),
+            "sh".to_string(),
+            "-c".to_string(),
+            cmd.to_string(),
+        ],
         _ => return None,
     };
     Some(args)
@@ -119,7 +159,12 @@ fn run_in_terminal(cmd: &str, action: &str) -> String {
 
     for term in terminals {
         // Проверяем, установлен ли терминал
-        if !Command::new("which").arg(term).output().map(|o| o.status.success()).unwrap_or(false) {
+        if !Command::new("which")
+            .arg(term)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
             continue;
         }
 
@@ -136,23 +181,17 @@ fn run_in_terminal(cmd: &str, action: &str) -> String {
         }
     }
 
-    format!("[X] Не найден терминал для {}. Установите {} или другой терминал.",
-            de.name(), de.preferred_terminal())
+    format!(
+        "[X] Не найден терминал для {}. Установите {} или другой терминал.",
+        de.name(),
+        de.preferred_terminal()
+    )
 }
 
 /// Обновление системы
 /// Запускаем в терминале, т.к. yay требует интерактивный ввод для sudo
 pub fn update_system() -> String {
     run_in_terminal("yay -Syu", "Обновление системы")
-}
-
-/// Проверка наличия yay
-pub fn check_yay_installed() -> String {
-    if is_yay_installed() {
-        messages::YAY_FOUND.into()
-    } else {
-        messages::YAY_NOT_FOUND.into()
-    }
 }
 
 /// Проверка yay (возвращает bool)
@@ -172,7 +211,14 @@ pub fn install_yay() -> String {
 
     // 1. Установка зависимостей
     let deps = Command::new("pkexec")
-        .args(["pacman", "-S", "--needed", "--noconfirm", "git", "base-devel"])
+        .args([
+            "pacman",
+            "-S",
+            "--needed",
+            "--noconfirm",
+            "git",
+            "base-devel",
+        ])
         .status();
 
     if deps.is_err() || !deps.unwrap().success() {
@@ -192,7 +238,10 @@ pub fn install_yay() -> String {
 
     // 3. Сборка и установка
     let build = Command::new("sh")
-        .args(["-c", &format!("cd {} && makepkg -si --noconfirm", YAY_INSTALL_DIR)])
+        .args([
+            "-c",
+            &format!("cd {} && makepkg -si --noconfirm", YAY_INSTALL_DIR),
+        ])
         .status();
 
     // Очистка

@@ -7,9 +7,10 @@ pub const CMD_CLEAR_CHAT: &str = "COMMAND_ACTION_CLEAR";
 pub fn process_basic_command(cmd: &str, assistant_name: &str) -> Option<String> {
     match cmd {
         // Приветствие
-        "привет" | "здравствуй" | "хай" | "hello" => {
-            Some(format!("Привет! Я {}, твой помощник для Arch Linux.", assistant_name))
-        }
+        "привет" | "здравствуй" | "хай" | "hello" => Some(format!(
+            "Привет! Я {}, твой помощник для Arch Linux.",
+            assistant_name
+        )),
 
         // Очистка чата — возвращаем маркер для перехвата в UI
         "очистить" | "очистить чат" | "clear" => {
@@ -27,9 +28,10 @@ pub fn process_basic_command(cmd: &str, assistant_name: &str) -> Option<String> 
         }
 
         // Время
-        "время" | "который час" | "time" => {
-            Some(format!("Текущее время: {}", Local::now().format("%H:%M:%S")))
-        }
+        "время" | "который час" | "time" => Some(format!(
+            "Текущее время: {}",
+            Local::now().format("%H:%M:%S")
+        )),
 
         // Дата
         "дата" | "какое сегодня число" | "date" => {
@@ -37,14 +39,13 @@ pub fn process_basic_command(cmd: &str, assistant_name: &str) -> Option<String> 
         }
 
         // Дата и время
-        "дата и время" => {
-            Some(format!("Сейчас: {}", Local::now().format("%d.%m.%Y %H:%M:%S")))
-        }
+        "дата и время" => Some(format!(
+            "Сейчас: {}",
+            Local::now().format("%d.%m.%Y %H:%M:%S")
+        )),
 
         // Помощь
-        "помощь" | "help" | "?" => {
-            Some(HELP_TEXT.to_string())
-        }
+        "помощь" | "help" | "?" => Some(HELP_TEXT.to_string()),
 
         _ => None,
     }

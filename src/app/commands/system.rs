@@ -1,7 +1,7 @@
 //! Системные команды (выключение, перезагрузка)
 
-use std::process::Command;
 use crate::app::chat::DialogState;
+use std::process::Command;
 
 /// Обработка системных команд (показывает диалог подтверждения)
 pub fn process_system_command(cmd: &str, dialog: &mut DialogState) -> Option<String> {

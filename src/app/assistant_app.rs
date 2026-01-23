@@ -1,18 +1,18 @@
 //! Главная структура приложения
 
-use super::config::Config;
-use super::chat::{ChatHistory, TaskManager, DialogState, InputHistory};
+use super::ai::local_provider::LocalAi;
+use super::chat::{ChatHistory, DialogState, InputHistory, TaskManager};
 use super::commands::{self, base::CMD_CLEAR_CHAT};
+use super::config::Config;
 use super::constants::messages;
+use super::desktop::{DeStyles, DesktopEnvironment};
 use super::guides::GuideRegistry;
 use super::ui;
-use super::ai::local_provider::LocalAi;
-use super::desktop::{DesktopEnvironment, DeStyles};
 use eframe::egui;
-use std::sync::{mpsc, Arc, OnceLock};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
 use regex::Regex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 /// Интервал проверки статуса Ollama (в секундах)
 const OLLAMA_CHECK_INTERVAL: u64 = 30;
@@ -148,7 +148,13 @@ impl AssistantApp {
         self.chat.add_message("Вы", &input);
 
         // Пробуем обработать как команду
-        let response = commands::process_command(&input, &self.config.assistant_name, &mut self.dialog, &self.tasks, &self.guides);
+        let response = commands::process_command(
+            &input,
+            &self.config.assistant_name,
+            &mut self.dialog,
+            &self.tasks,
+            &self.guides,
+        );
 
         if let Some(text) = response {
             // Проверяем специальные команды
@@ -244,7 +250,8 @@ impl AssistantApp {
     /// Очистка чата
     pub fn clear_chat(&mut self) {
         self.chat.clear();
-        self.chat.add_message(&self.config.assistant_name, messages::CHAT_CLEARED);
+        self.chat
+            .add_message(&self.config.assistant_name, messages::CHAT_CLEARED);
     }
 }
 
