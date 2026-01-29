@@ -5,6 +5,7 @@ use crate::app::constants::{
     errors, messages, OLLAMA_CUSTOM_MODEL, OLLAMA_INSTALL_SCRIPT, OLLAMA_MODEL,
     OLLAMA_TIMEOUT_SECS, OLLAMA_URL,
 };
+use crate::app::desktop::DesktopEnvironment;
 use regex::Regex;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -248,7 +249,7 @@ pub fn is_ollama_installed() -> bool {
         .unwrap_or(false)
 }
 
-/// Устанавливает Ollama через официальный скрипт
+/// Устанавливает Ollama через официальный скрипт в терминале
 /// curl -fsSL https://ollama.com/install.sh | sh
 pub fn install_ollama() -> String {
     // Проверяем, не установлена ли уже
@@ -256,22 +257,88 @@ pub fn install_ollama() -> String {
         return messages::OLLAMA_ALREADY.to_string();
     }
 
-    // Скачиваем и выполняем установочный скрипт
-    let result = Command::new("sh")
-        .arg("-c")
-        .arg(format!("curl -fsSL {} | sh", OLLAMA_INSTALL_SCRIPT))
-        .output();
+    let cmd = format!("curl -fsSL {} | sh", OLLAMA_INSTALL_SCRIPT);
+    run_in_terminal(&cmd, "Установка Ollama")
+}
 
-    match result {
-        Ok(output) if output.status.success() => messages::OLLAMA_INSTALLED.to_string(),
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            format!("{} ({})", errors::OLLAMA_INSTALL_FAILED, stderr.trim())
+/// Запускает команду в терминале (с учётом текущего DE)
+fn run_in_terminal(cmd: &str, action: &str) -> String {
+    let de = DesktopEnvironment::detect();
+    let terminals = de.terminal_priority();
+
+    for term in terminals {
+        // Проверяем, установлен ли терминал
+        if !Command::new("which")
+            .arg(term)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            continue;
         }
-        Err(e) => {
-            format!("{} ({})", errors::OLLAMA_INSTALL_FAILED, e)
+
+        // Получаем аргументы для терминала
+        let args = match get_terminal_args(term, cmd) {
+            Some(a) => a,
+            None => continue,
+        };
+
+        // Запускаем
+        match Command::new(term).args(&args).spawn() {
+            Ok(_) => return format!("[OK] {} запущено в {}", action, term),
+            Err(_) => continue,
         }
     }
+
+    format!(
+        "[X] Не найден терминал для {}. Установите {} или другой терминал.",
+        de.name(),
+        de.preferred_terminal()
+    )
+}
+
+/// Возвращает аргументы для запуска команды в конкретном терминале
+fn get_terminal_args(term: &str, cmd: &str) -> Option<Vec<String>> {
+    let args = match term {
+        "kitty" => vec![
+            "--hold".to_string(),
+            "-e".to_string(),
+            "sh".to_string(),
+            "-c".to_string(),
+            cmd.to_string(),
+        ],
+        "alacritty" => vec![
+            "-e".to_string(),
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("{}; echo 'Нажмите Enter...'; read", cmd),
+        ],
+        "gnome-terminal" | "kgx" => vec![
+            "--".to_string(),
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("{}; echo 'Нажмите Enter...'; read", cmd),
+        ],
+        "konsole" => vec![
+            "-e".to_string(),
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("{}; echo 'Нажмите Enter...'; read", cmd),
+        ],
+        "xfce4-terminal" => vec![
+            "-e".to_string(),
+            format!("sh -c '{}; echo Нажмите Enter...; read'", cmd),
+        ],
+        "xterm" => vec![
+            "-hold".to_string(),
+            "-e".to_string(),
+            "sh".to_string(),
+            "-c".to_string(),
+            cmd.to_string(),
+        ],
+        _ => return None,
+    };
+    Some(args)
 }
 
 /// Запускает сервис Ollama в фоне
