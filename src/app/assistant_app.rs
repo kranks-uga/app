@@ -177,9 +177,10 @@ impl AssistantApp {
         let tx = self.tasks.result_sender.clone();
         let name = self.config.assistant_name.clone();
         let input = input.to_string();
+        let history = self.chat.as_pairs();
 
         tokio::spawn(async move {
-            let response = match ai.generate(&input).await {
+            let response = match ai.generate(&history, &input).await {
                 Ok(text) => format!("{}: {}", name, text),
                 Err(e) => format!("Ошибка ИИ: {}", e),
             };

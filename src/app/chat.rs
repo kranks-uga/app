@@ -133,6 +133,14 @@ impl ChatHistory {
     pub fn messages(&self) -> impl Iterator<Item = &ChatMessage> {
         self.messages.iter()
     }
+
+    /// Возвращает историю как вектор пар (отправитель, текст)
+    pub fn as_pairs(&self) -> Vec<(String, String)> {
+        self.messages
+            .iter()
+            .map(|m| (m.sender.clone(), m.text.clone()))
+            .collect()
+    }
 }
 
 impl Default for ChatHistory {

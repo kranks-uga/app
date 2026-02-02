@@ -10,7 +10,7 @@ pub const DEFAULT_ASSISTANT_NAME: &str = "Альфонс";
 pub const DEFAULT_ACCENT_COLOR: [u8; 3] = [61, 174, 233]; // Голубой
 
 // === Ollama AI ===
-pub const OLLAMA_URL: &str = "http://localhost:11434/api/generate";
+pub const OLLAMA_CHAT_URL: &str = "http://localhost:11434/api/chat";
 pub const OLLAMA_MODEL: &str = "llama3";
 pub const OLLAMA_CUSTOM_MODEL: &str = "alfons";
 pub const OLLAMA_TIMEOUT_SECS: u64 = 60;

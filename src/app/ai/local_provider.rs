@@ -2,8 +2,8 @@
 
 use super::tools::ToolRegistry;
 use crate::app::constants::{
-    errors, messages, OLLAMA_CUSTOM_MODEL, OLLAMA_INSTALL_SCRIPT, OLLAMA_MODEL,
-    OLLAMA_TIMEOUT_SECS, OLLAMA_URL,
+    errors, messages, OLLAMA_CHAT_URL, OLLAMA_CUSTOM_MODEL, OLLAMA_INSTALL_SCRIPT, OLLAMA_MODEL,
+    OLLAMA_TIMEOUT_SECS,
 };
 use crate::app::desktop::DesktopEnvironment;
 use regex::Regex;
@@ -19,17 +19,28 @@ fn tool_regex() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"\[TOOL:([^\]]+)\]").expect("Invalid TOOL regex"))
 }
 
+/// Сообщение для chat API
+#[derive(Serialize, Clone)]
+struct ChatMessage {
+    role: String,
+    content: String,
+}
+
 #[derive(Serialize)]
-struct OllamaRequest {
+struct OllamaChatRequest {
     model: String,
-    prompt: String,
+    messages: Vec<ChatMessage>,
     stream: bool,
-    system: String,
 }
 
 #[derive(Deserialize)]
-struct OllamaResponse {
-    response: String,
+struct OllamaChatResponse {
+    message: ChatMessageContent,
+}
+
+#[derive(Deserialize)]
+struct ChatMessageContent {
+    content: String,
 }
 
 /// Клиент для работы с Ollama
@@ -63,30 +74,59 @@ impl LocalAi {
         self.model.read().map(|m| m.clone()).unwrap_or_default()
     }
 
-    /// Генерирует ответ на запрос пользователя
-    pub async fn generate(&self, input: &str) -> Result<String, String> {
-        let payload = OllamaRequest {
+    /// Генерирует ответ на запрос пользователя с учётом истории
+    pub async fn generate(&self, history: &[(String, String)], input: &str) -> Result<String, String> {
+        // Формируем сообщения для chat API
+        let mut messages = vec![
+            ChatMessage {
+                role: "system".to_string(),
+                content: self.tools.generate_system_prompt(),
+            },
+        ];
+
+        // Добавляем историю чата (пропускаем системные сообщения)
+        for (sender, text) in history {
+            // "Вы" -> user, имя ассистента -> assistant
+            let role = if sender == "Вы" {
+                "user"
+            } else if sender == "Система" {
+                continue; // Пропускаем системные сообщения
+            } else {
+                "assistant"
+            };
+            messages.push(ChatMessage {
+                role: role.to_string(),
+                content: text.clone(),
+            });
+        }
+
+        // Добавляем текущий ввод
+        messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: input.to_string(),
+        });
+
+        let payload = OllamaChatRequest {
             model: self.get_model(),
-            prompt: input.to_string(),
+            messages,
             stream: false,
-            system: self.tools.generate_system_prompt(),
         };
 
         let response = self
             .client
-            .post(OLLAMA_URL)
+            .post(OLLAMA_CHAT_URL)
             .json(&payload)
             .send()
             .await
             .map_err(|e| format!("{}: {}", errors::OLLAMA_CONNECTION, e))?;
 
-        let data: OllamaResponse = response
+        let data: OllamaChatResponse = response
             .json()
             .await
             .map_err(|e| format!("{}: {}", errors::OLLAMA_PARSE, e))?;
 
         // Обрабатываем инструменты и команды в ответе
-        Ok(self.process_response(&data.response))
+        Ok(self.process_response(&data.message.content))
     }
 
     /// Обрабатывает маркеры [TOOL:...] и [CMD:...] в ответе
