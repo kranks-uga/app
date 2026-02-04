@@ -1,6 +1,7 @@
 //! Определение окружения рабочего стола и адаптация UI
 
 use std::env;
+use std::process::Command;
 
 /// Тип окружения рабочего стола
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -129,4 +130,83 @@ impl DeStyles {
             },
         }
     }
+}
+
+pub fn run_in_terminal(cmd: &str, action: &str) -> String {
+    let de = DesktopEnvironment::detect();
+    let terminals = de.terminal_priority();
+
+    for term in terminals {
+        // Проверяем, установлен ли терминал
+        if !Command::new("which")
+            .arg(term)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+
+        // Получаем аргументы для терминала
+        let args = match get_terminal_args(term, cmd) {
+            Some(a) => a,
+            None => continue,
+        };
+
+        // Запускаем
+        match Command::new(term).args(&args).spawn() {
+            Ok(_) => return format!("[OK] {} запущено в {}", action, term),
+            Err(_) => continue,
+        }
+    }
+
+    format!(
+        "[X] Не найден терминал для {}. Установите {} или другой терминал.",
+        de.name(),
+        de.preferred_terminal()
+    )
+}
+
+/// Возвращает аргументы для запуска команды в конкретном терминале
+fn get_terminal_args(term: &str, cmd: &str) -> Option<Vec<String>> {
+    let args = match term {
+        "kitty" => vec![
+            "--hold".to_string(),
+            "-e".to_string(),
+            "sh".to_string(),
+            "-c".to_string(),
+            cmd.to_string(),
+        ],
+        "alacritty" => vec![
+            "-e".to_string(),
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("{}; echo 'Нажмите Enter...'; read", cmd),
+        ],
+        "gnome-terminal" | "kgx" => vec![
+            "--".to_string(),
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("{}; echo 'Нажмите Enter...'; read", cmd),
+        ],
+        "konsole" => vec![
+            "-e".to_string(),
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("{}; echo 'Нажмите Enter...'; read", cmd),
+        ],
+        "xfce4-terminal" => vec![
+            "-e".to_string(),
+            format!("sh -c '{}; echo Нажмите Enter...; read'", cmd),
+        ],
+        "xterm" => vec![
+            "-hold".to_string(),
+            "-e".to_string(),
+            "sh".to_string(),
+            "-c".to_string(),
+            cmd.to_string(),
+        ],
+        _ => return None,
+    };
+    Some(args)
 }

@@ -39,7 +39,6 @@ pub mod messages {
     pub const MODEL_CREATED: &str = "[OK] Модель 'alfons' создана! Переключаю на неё.";
     pub const MODEL_EXISTS: &str = "Модель 'alfons' уже существует.";
     pub const OLLAMA_INSTALLING: &str = "Устанавливаю Ollama... Это может занять некоторое время.";
-    pub const OLLAMA_INSTALLED: &str = "[OK] Ollama успешно установлена!";
     pub const OLLAMA_ALREADY: &str = "Ollama уже установлена!";
     pub const OLLAMA_STARTING: &str = "Запускаю сервис Ollama...";
     pub const OLLAMA_STARTED: &str = "[OK] Сервис Ollama запущен!";

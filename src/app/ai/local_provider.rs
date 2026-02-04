@@ -5,13 +5,13 @@ use crate::app::constants::{
     errors, messages, OLLAMA_CHAT_URL, OLLAMA_CUSTOM_MODEL, OLLAMA_INSTALL_SCRIPT, OLLAMA_MODEL,
     OLLAMA_TIMEOUT_SECS,
 };
-use crate::app::desktop::DesktopEnvironment;
 use regex::Regex;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 use std::sync::{OnceLock, RwLock};
 use std::time::Duration;
+use crate::app::desktop::run_in_terminal;
 
 /// Статический Regex для парсинга [TOOL:...] маркеров
 fn tool_regex() -> &'static Regex {
@@ -301,85 +301,7 @@ pub fn install_ollama() -> String {
     run_in_terminal(&cmd, "Установка Ollama")
 }
 
-/// Запускает команду в терминале (с учётом текущего DE)
-fn run_in_terminal(cmd: &str, action: &str) -> String {
-    let de = DesktopEnvironment::detect();
-    let terminals = de.terminal_priority();
 
-    for term in terminals {
-        // Проверяем, установлен ли терминал
-        if !Command::new("which")
-            .arg(term)
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-        {
-            continue;
-        }
-
-        // Получаем аргументы для терминала
-        let args = match get_terminal_args(term, cmd) {
-            Some(a) => a,
-            None => continue,
-        };
-
-        // Запускаем
-        match Command::new(term).args(&args).spawn() {
-            Ok(_) => return format!("[OK] {} запущено в {}", action, term),
-            Err(_) => continue,
-        }
-    }
-
-    format!(
-        "[X] Не найден терминал для {}. Установите {} или другой терминал.",
-        de.name(),
-        de.preferred_terminal()
-    )
-}
-
-/// Возвращает аргументы для запуска команды в конкретном терминале
-fn get_terminal_args(term: &str, cmd: &str) -> Option<Vec<String>> {
-    let args = match term {
-        "kitty" => vec![
-            "--hold".to_string(),
-            "-e".to_string(),
-            "sh".to_string(),
-            "-c".to_string(),
-            cmd.to_string(),
-        ],
-        "alacritty" => vec![
-            "-e".to_string(),
-            "sh".to_string(),
-            "-c".to_string(),
-            format!("{}; echo 'Нажмите Enter...'; read", cmd),
-        ],
-        "gnome-terminal" | "kgx" => vec![
-            "--".to_string(),
-            "sh".to_string(),
-            "-c".to_string(),
-            format!("{}; echo 'Нажмите Enter...'; read", cmd),
-        ],
-        "konsole" => vec![
-            "-e".to_string(),
-            "sh".to_string(),
-            "-c".to_string(),
-            format!("{}; echo 'Нажмите Enter...'; read", cmd),
-        ],
-        "xfce4-terminal" => vec![
-            "-e".to_string(),
-            format!("sh -c '{}; echo Нажмите Enter...; read'", cmd),
-        ],
-        "xterm" => vec![
-            "-hold".to_string(),
-            "-e".to_string(),
-            "sh".to_string(),
-            "-c".to_string(),
-            cmd.to_string(),
-        ],
-        _ => return None,
-    };
-    Some(args)
-}
 
 /// Запускает сервис Ollama в фоне
 pub fn start_ollama_service() -> String {
