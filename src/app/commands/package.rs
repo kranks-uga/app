@@ -53,7 +53,7 @@ pub fn process_package_command(
     {
         dialog.show_confirm(
             "Обновление системы",
-            "Выполнить полное обновление (yay -Syu)?",
+            "Выполнить полное обновление (yay)?",
             "",
         );
         return Some("Подготовка к обновлению...".into());
@@ -191,7 +191,7 @@ fn run_in_terminal(cmd: &str, action: &str) -> String {
 /// Обновление системы
 /// Запускаем в терминале, т.к. yay требует интерактивный ввод для sudo
 pub fn update_system() -> String {
-    run_in_terminal("yay -Syu", "Обновление системы")
+    run_in_terminal("yay", "Обновление")
 }
 
 /// Проверка yay (возвращает bool)
