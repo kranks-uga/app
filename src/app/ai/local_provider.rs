@@ -1,5 +1,6 @@
 //! Локальный AI через Ollama
 
+use crate::app::desktop::run_in_terminal;
 use super::tools::ToolRegistry;
 use crate::app::constants::{
     errors, messages, OLLAMA_CHAT_URL, OLLAMA_CUSTOM_MODEL, OLLAMA_INSTALL_SCRIPT, OLLAMA_MODEL,
@@ -11,7 +12,6 @@ use serde::{Deserialize, Serialize};
 use std::process::Command;
 use std::sync::{OnceLock, RwLock};
 use std::time::Duration;
-use crate::app::desktop::run_in_terminal;
 
 /// Статический Regex для парсинга [TOOL:...] маркеров
 fn tool_regex() -> &'static Regex {
@@ -74,8 +74,115 @@ impl LocalAi {
         self.model.read().map(|m| m.clone()).unwrap_or_default()
     }
 
+    /// Проверяет наличие модели и устанавливает если нужно
+    async fn ensure_model(&self) -> Result<(), String> {
+        let model = self.get_model();
+
+        // Проверяем, существует ли модель
+        let exists = tokio::process::Command::new("ollama")
+            .args(["show", &model])
+            .output()
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+        if exists {
+            return Ok(());
+        }
+
+        // Если нужна кастомная модель — сначала качаем базовую
+        if model == OLLAMA_CUSTOM_MODEL {
+            let base_exists = tokio::process::Command::new("ollama")
+                .args(["show", OLLAMA_MODEL])
+                .output()
+                .await
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+
+            if !base_exists {
+                Self::pull_model(OLLAMA_MODEL).await?;
+            }
+
+            // Создаём кастомную модель
+            self.create_custom_model_auto().await?;
+        } else {
+            Self::pull_model(&model).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Скачивает модель через ollama pull
+    async fn pull_model(model: &str) -> Result<(), String> {
+        let output = tokio::process::Command::new("ollama")
+            .args(["pull", model])
+            .output()
+            .await
+            .map_err(|e| format!("Ошибка загрузки модели {}: {}", model, e))?;
+
+        if output.status.success() {
+            Ok(())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(format!("Ошибка загрузки модели {}: {}", model, stderr.trim()))
+        }
+    }
+
+    /// Создаёт кастомную модель автоматически
+    async fn create_custom_model_auto(&self) -> Result<(), String> {
+        // Находим или создаём Modelfile
+        let modelfile = Self::find_or_create_modelfile()
+            .map_err(|e| format!("Ошибка создания Modelfile: {}", e))?;
+
+        let output = tokio::process::Command::new("ollama")
+            .args(["create", OLLAMA_CUSTOM_MODEL, "-f"])
+            .arg(&modelfile)
+            .output()
+            .await
+            .map_err(|e| format!("Ошибка создания модели: {}", e))?;
+
+        if output.status.success() {
+            Ok(())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(format!("Ошибка создания модели: {}", stderr.trim()))
+        }
+    }
+
+    /// Находит существующий Modelfile или создаёт новый
+    fn find_or_create_modelfile() -> Result<std::path::PathBuf, String> {
+        let modelfile_paths = [
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|p| p.join("Modelfile")))
+                .unwrap_or_default(),
+            std::path::PathBuf::from("Modelfile"),
+            dirs::config_dir()
+                .map(|p| p.join("alfons-assistant").join("Modelfile"))
+                .unwrap_or_default(),
+        ];
+
+        if let Some(path) = modelfile_paths.iter().find(|p| p.exists()) {
+            return Ok(path.clone());
+        }
+
+        // Создаём Modelfile в конфиг директории
+        let config_dir = dirs::config_dir()
+            .ok_or_else(|| "Не найдена конфиг директория".to_string())?;
+        let config_path = config_dir.join("alfons-assistant");
+        std::fs::create_dir_all(&config_path)
+            .map_err(|e| format!("Ошибка создания директории: {}", e))?;
+        let modelfile_path = config_path.join("Modelfile");
+        std::fs::write(&modelfile_path, generate_modelfile_content())
+            .map_err(|e| format!("Ошибка записи Modelfile: {}", e))?;
+        Ok(modelfile_path)
+    }
+
     /// Генерирует ответ на запрос пользователя с учётом истории
     pub async fn generate(&self, history: &[(String, String)], input: &str) -> Result<String, String> {
+        // Проверяем и устанавливаем модель если нужно
+        self.ensure_model().await?;
+
         // Формируем сообщения для chat API
         let mut messages = vec![
             ChatMessage {
@@ -119,6 +226,11 @@ impl LocalAi {
             .send()
             .await
             .map_err(|e| format!("{}: {}", errors::OLLAMA_CONNECTION, e))?;
+
+        if !response.status().is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!("Ollama вернула ошибку: {}", body));
+        }
 
         let data: OllamaChatResponse = response
             .json()
@@ -189,7 +301,19 @@ pub fn is_base_model_exists() -> bool {
 pub fn create_custom_model() -> String {
     // Проверяем, что базовая модель существует
     if !is_base_model_exists() {
-        return errors::MODEL_BASE_NOT_FOUND.to_string();
+        let confirmed = rfd::MessageDialog::new()
+            .set_title("Модель не найдена")
+            .set_description(&format!("Не найдена модель {}. Установить?", OLLAMA_MODEL))
+            .set_buttons(rfd::MessageButtons::YesNo)
+            .show();
+
+        if confirmed == rfd::MessageDialogResult::Yes {
+            // Скачиваем базовую модель в терминале
+            let cmd = format!("ollama pull {}", OLLAMA_MODEL);
+            return run_in_terminal(&cmd, &format!("Установка модели {}", OLLAMA_MODEL));
+        } else {
+            return errors::MODEL_BASE_NOT_FOUND.to_string();
+        }
     }
 
     // Проверяем, не существует ли уже модель

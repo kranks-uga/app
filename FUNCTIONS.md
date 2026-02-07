@@ -13,6 +13,7 @@
 - [Модуль ui](#модуль-ui)
 - [Модуль desktop](#модуль-desktop)
 - [Модуль installer](#модуль-installer)
+- [Модуль command_log](#модуль-command_log)
 - [Модуль constants](#модуль-constants)
 
 ---
@@ -23,14 +24,37 @@
 
 Главная структура приложения, объединяющая все компоненты.
 
+### Константы
+
+```rust
+/// Интервал проверки статуса Ollama (в секундах)
+const OLLAMA_CHECK_INTERVAL: u64 = 30;
+```
+
+### Вспомогательные функции
+
+#### `cmd_regex() -> &'static Regex`
+
+Возвращает статически инициализированный Regex для парсинга `[CMD:...]` маркеров в ответах AI.
+
+```rust
+fn cmd_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\[CMD:([^\]]+)\]").expect("Invalid CMD regex"))
+}
+```
+
 ### Структура `AssistantApp`
 
 ```rust
 pub struct AssistantApp {
+    // Данные
     pub config: Config,
     pub chat: ChatHistory,
     pub guides: GuideRegistry,
     pub ai: Arc<LocalAi>,
+
+    // UI состояние
     pub input_text: String,
     pub show_settings: bool,
     pub dialog: DialogState,
@@ -40,9 +64,15 @@ pub struct AssistantApp {
     pub yay_installed: Arc<AtomicBool>,
     pub custom_model_exists: Arc<AtomicBool>,
     pub app_installed: Arc<AtomicBool>,
+    last_ollama_check: Instant,
+
+    // Окружение рабочего стола
     pub desktop_env: DesktopEnvironment,
     pub de_styles: DeStyles,
+
+    // Фоновые задачи
     pub tasks: TaskManager,
+    task_receiver: mpsc::Receiver<String>,
 }
 ```
 
@@ -50,32 +80,34 @@ pub struct AssistantApp {
 
 #### `AssistantApp::new(cc: &CreationContext) -> Self`
 
-Создаёт новый экземпляр приложения.
+Создаёт новый экземпляр приложения. Выполняет:
+1. Создание `TaskManager` и канала для результатов
+2. Загрузку конфигурации
+3. Определение окружения рабочего стола (DE)
+4. Инициализацию чата с приветственным сообщением
+5. Создание AI клиента и установку модели
+6. Фоновые проверки: Ollama online, Ollama установлена, yay установлен, кастомная модель, установка в систему
 
-**Пример из проекта (src/app/assistant_app.rs:56-125):**
 ```rust
-pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
-    let (tasks, task_receiver) = TaskManager::new();
-    let config = Config::load();
+let app = AssistantApp::new(cc);
+```
 
-    // Определяем окружение рабочего стола
-    let desktop_env = DesktopEnvironment::detect();
-    let de_styles = DeStyles::for_de(desktop_env);
+---
 
-    let mut chat = ChatHistory::default();
-    chat.add_message(&config.assistant_name, messages::WELCOME);
+#### `check_ollama_periodic(&mut self)`
 
-    let ai = Arc::new(LocalAi::new());
-    ai.set_model(&config.ollama_model);
+Периодически проверяет статус Ollama (каждые 30 секунд). Вызывается на каждом кадре UI из `update()`. Запускает асинхронную проверку через `tokio::spawn`.
 
-    // Запускаем проверку статуса Ollama в фоне
-    let ollama_online = Arc::new(AtomicBool::new(false));
-    let ollama_online_clone = ollama_online.clone();
-    tokio::spawn(async move {
-        let status = super::ai::local_provider::check_ollama_status().await;
-        ollama_online_clone.store(status, Ordering::SeqCst);
-    });
-    // ...
+```rust
+fn check_ollama_periodic(&mut self) {
+    if self.last_ollama_check.elapsed() >= Duration::from_secs(OLLAMA_CHECK_INTERVAL) {
+        self.last_ollama_check = Instant::now();
+        let ollama_online = self.ollama_online.clone();
+        tokio::spawn(async move {
+            let status = check_ollama_status().await;
+            ollama_online.store(status, Ordering::SeqCst);
+        });
+    }
 }
 ```
 
@@ -83,63 +115,28 @@ pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
 
 #### `process_input(&mut self)`
 
-Обрабатывает ввод пользователя.
+Обрабатывает ввод пользователя. Сначала пробует распознать как команду через `commands::process_command()`, если не удалось — отправляет в AI.
 
-**Пример из проекта (src/app/assistant_app.rs:140-172):**
 ```rust
-pub fn process_input(&mut self) {
-    let input = self.input_text.trim();
-    if input.is_empty() {
-        return;
-    }
-
-    let input = input.to_string();
-    self.input_history.push(&input);
-    self.chat.add_message("Вы", &input);
-
-    // Пробуем обработать как команду
-    let response = commands::process_command(
-        &input,
-        &self.config.assistant_name,
-        &mut self.dialog,
-        &self.tasks,
-        &self.guides,
-    );
-
-    if let Some(text) = response {
-        if text == CMD_CLEAR_CHAT {
-            self.clear_chat();
-        } else {
-            self.chat.add_message(&self.config.assistant_name, text);
-        }
-    } else {
-        // Отправляем в AI
-        self.send_to_ai(&input);
-    }
-
-    self.input_text.clear();
-}
+app.process_input();
+// 1. Сохраняет ввод в историю
+// 2. Добавляет сообщение пользователя в чат
+// 3. Пробует обработать как команду
+// 4. Если не команда — отправляет в AI
+// 5. Очищает поле ввода
 ```
 
 ---
 
 #### `send_to_ai(&self, input: &str)`
 
-Отправляет запрос в AI асинхронно.
+Отправляет запрос в AI асинхронно. Передаёт **историю чата** для контекста.
 
-**Пример из проекта (src/app/assistant_app.rs:175-188):**
 ```rust
 fn send_to_ai(&self, input: &str) {
-    let ai = Arc::clone(&self.ai);
-    let tx = self.tasks.result_sender.clone();
-    let name = self.config.assistant_name.clone();
-    let input = input.to_string();
-
+    let history = self.chat.as_pairs(); // История для контекста
     tokio::spawn(async move {
-        let response = match ai.generate(&input).await {
-            Ok(text) => format!("{}: {}", name, text),
-            Err(e) => format!("Ошибка ИИ: {}", e),
-        };
+        let response = ai.generate(&history, &input).await;
         let _ = tx.send(response);
     });
 }
@@ -147,55 +144,46 @@ fn send_to_ai(&self, input: &str) {
 
 ---
 
+#### `check_tasks(&mut self)`
+
+Проверяет завершённые фоновые задачи. AI ответы (начинающиеся с имени ассистента) обрабатываются через `process_ai_commands()`, остальные отображаются как системные сообщения.
+
+```rust
+app.check_tasks();
+// Вызывается на каждом кадре UI из update()
+```
+
+---
+
 #### `process_ai_commands(&mut self, text: &str) -> String`
 
-Обрабатывает маркеры `[CMD:...]` в ответе AI.
+Обрабатывает маркеры `[CMD:...]` в ответе AI и выполняет соответствующие команды.
 
-**Пример из проекта (src/app/assistant_app.rs:209-248):**
+**Пример:**
+```
+Вход: "Сейчас установлю [CMD:установить firefox]"
+Выход: "Сейчас установлю " (команда выполнится — откроется диалог подтверждения)
+```
+
+---
+
+#### `clear_chat(&mut self)`
+
+Очищает историю чата и добавляет сообщение «История чата очищена».
+
 ```rust
-fn process_ai_commands(&mut self, text: &str) -> String {
-    let cmd_re = cmd_regex();
-    let mut result = text.to_string();
-
-    // Находим все команды в тексте
-    let commands: Vec<String> = cmd_re
-        .captures_iter(text)
-        .map(|cap| cap[1].to_string())
-        .collect();
-
-    // Выполняем каждую команду
-    for cmd in commands {
-        let marker = format!("[CMD:{}]", cmd);
-
-        let cmd_response = commands::process_command(
-            &cmd,
-            &self.config.assistant_name,
-            &mut self.dialog,
-            &self.tasks,
-            &self.guides,
-        );
-
-        if let Some(response) = cmd_response {
-            if response == commands::base::CMD_CLEAR_CHAT {
-                self.clear_chat();
-                result = result.replace(&marker, "");
-            } else {
-                result = result.replace(&marker, "");
-            }
-        } else {
-            result = result.replace(&marker, &format!("[!] команда '{}' не распознана", cmd));
-        }
-    }
-
-    result
-}
+app.clear_chat();
 ```
 
-**Пример использования:**
-```
-Вход: "Сейчас [CMD:время], погода хорошая"
-Выход: "Сейчас , погода хорошая" (команда "время" выполнится отдельно)
-```
+---
+
+#### `impl eframe::App for AssistantApp`
+
+Реализация трейта `App` для интеграции с eframe. Метод `update()` вызывается на каждом кадре:
+1. `check_tasks()` — проверка фоновых задач
+2. `check_ollama_periodic()` — проверка статуса Ollama
+3. Применение стилей DE (скругления, отступы)
+4. `ui::render()` — отрисовка интерфейса
 
 ---
 
@@ -215,7 +203,8 @@ pub enum DialogType {
 
 ### Структура `DialogState`
 
-**Пример из проекта (src/app/chat.rs:26-34):**
+Состояние диалогового окна.
+
 ```rust
 pub struct DialogState {
     pub visible: bool,
@@ -227,47 +216,72 @@ pub struct DialogState {
 }
 ```
 
-#### `show_confirm(&mut self, title: &str, message: &str, package: &str)`
+#### `DialogState::new() -> Self`
 
-**Пример из проекта (src/app/chat.rs:50-56):**
+Создаёт пустой диалог (скрытый).
+
+#### `show_search(&mut self)`
+
+Открывает диалог поиска пакетов.
+
 ```rust
-pub fn show_confirm(&mut self, title: &str, message: &str, package: &str) {
-    self.visible = true;
-    self.dialog_type = DialogType::Confirmation;
-    self.title = title.to_string();
-    self.message = message.to_string();
-    self.package = package.to_string();
-}
+dialog.show_search();
+// title: "Поиск пакетов"
+// message: "Введите название пакета:"
 ```
 
-**Пример вызова (src/app/commands/package.rs:26-31):**
+#### `show_confirm(&mut self, title: &str, message: &str, package: &str)`
+
+Открывает диалог подтверждения действия.
+
 ```rust
 dialog.show_confirm(
     "Установка пакета",
-    &format!("Установить '{}' через yay?", package),
-    package,
+    "Установить 'firefox' через yay?",
+    "firefox",
 );
 ```
+
+**Специальные значения `package`:**
+- `"__shutdown__"` — выключение компьютера
+- `"__reboot__"` — перезагрузка
+
+#### `hide(&mut self)`
+
+Скрывает диалог и очищает поля ввода.
 
 ---
 
 ### Перечисление `BackgroundTask`
 
-**Пример из проекта (src/app/chat.rs:71-85):**
+Типы фоновых задач, выполняемых в отдельном потоке.
+
 ```rust
 pub enum BackgroundTask {
-    SearchPackages(String),
-    InstallPackage(String),
-    RemovePackage(String),
-    UpdateSystem,
-    InstallYay,
-    ShutdownSystem,
-    RebootSystem,
-    CreateCustomModel,
-    InstallToSystem,
-    UninstallFromSystem,
-    InstallOllama,
-    StartOllama,
+    SearchPackages(String),    // Поиск пакетов через yay
+    InstallPackage(String),    // Установка пакета
+    RemovePackage(String),     // Удаление пакета
+    UpdateSystem,              // Обновление системы (yay -Syu)
+    InstallYay,                // Установка yay из AUR
+    ShutdownSystem,            // Выключение ПК
+    RebootSystem,              // Перезагрузка ПК
+    CreateCustomModel,         // Создание модели alfons
+    InstallToSystem,           // Установка приложения в систему
+    UninstallFromSystem,       // Удаление приложения из системы
+    InstallOllama,             // Установка Ollama
+    StartOllama,               // Запуск сервиса Ollama
+}
+```
+
+---
+
+### Структура `ChatMessage`
+
+```rust
+pub struct ChatMessage {
+    pub sender: String,              // "Вы", "Альфонс", "Система"
+    pub text: String,                // Текст сообщения
+    pub timestamp: DateTime<Local>,  // Время отправки
 }
 ```
 
@@ -275,117 +289,93 @@ pub enum BackgroundTask {
 
 ### Структура `ChatHistory`
 
+Управление историей чата с ограничением количества сообщений (VecDeque).
+
+#### `ChatHistory::new(max_messages: usize) -> Self`
+
+Создаёт историю с указанным лимитом. По умолчанию — `MAX_CHAT_MESSAGES` (100).
+
 #### `add_message(&mut self, sender: impl Into<String>, text: impl Into<String>)`
 
-**Пример из проекта (src/app/chat.rs:114-125):**
-```rust
-pub fn add_message(&mut self, sender: impl Into<String>, text: impl Into<String>) {
-    self.messages.push_back(ChatMessage {
-        sender: sender.into(),
-        text: text.into(),
-        timestamp: Local::now(),
-    });
+Добавляет сообщение. При превышении лимита удаляет самое старое (O(1)).
 
-    // Удаляем старые сообщения при превышении лимита
-    if self.messages.len() > self.max_messages {
-        self.messages.pop_front();
-    }
-}
-```
-
-**Пример вызова:**
 ```rust
-app.chat.add_message("Система", messages::OLLAMA_INSTALLING);
+app.chat.add_message("Система", "Ollama запущена!");
 app.chat.add_message(&config.assistant_name, "Привет!");
 app.chat.add_message("Вы", &input);
+```
+
+#### `clear(&mut self)`
+
+Очищает всю историю.
+
+#### `messages(&self) -> impl Iterator<Item = &ChatMessage>`
+
+Возвращает итератор по сообщениям для отрисовки в UI.
+
+#### `as_pairs(&self) -> Vec<(String, String)>`
+
+Возвращает историю как вектор пар `(отправитель, текст)`. Используется для передачи контекста в AI.
+
+```rust
+let history = app.chat.as_pairs();
+ai.generate(&history, &input).await;
 ```
 
 ---
 
 ### Структура `TaskManager`
 
-**Пример из проекта (src/app/chat.rs:156-212):**
+Менеджер фоновых задач с каналами mpsc.
+
+#### `TaskManager::new() -> (Self, Receiver<String>)`
+
+Создаёт менеджер и запускает фоновый поток-обработчик. Возвращает кортеж `(менеджер, канал_результатов)`.
+
 ```rust
-pub fn new() -> (Self, Receiver<String>) {
-    let (task_sender, task_receiver) = mpsc::channel::<BackgroundTask>();
-    let (result_sender, result_receiver) = mpsc::channel::<String>();
-
-    let result_sender_clone = result_sender.clone();
-    let is_processing = Arc::new(AtomicBool::new(false));
-    let is_processing_clone = is_processing.clone();
-
-    // Фоновый поток для обработки задач
-    thread::spawn(move || {
-        while let Ok(task) = task_receiver.recv() {
-            let result = match task {
-                BackgroundTask::SearchPackages(query) => {
-                    super::commands::package::search_packages(&query)
-                }
-                BackgroundTask::InstallPackage(package) => {
-                    super::commands::package::install_package(&package)
-                }
-                BackgroundTask::UpdateSystem => super::commands::package::update_system(),
-                BackgroundTask::ShutdownSystem => super::commands::system::execute_shutdown(),
-                // ...
-            };
-            let _ = result_sender_clone.send(result);
-            is_processing_clone.store(false, Ordering::SeqCst);
-        }
-    });
-    // ...
-}
+let (tasks, task_receiver) = TaskManager::new();
 ```
 
-**Пример вызова:**
+#### `execute(&self, task: BackgroundTask)`
+
+Запускает фоновую задачу. Устанавливает флаг `is_processing` перед отправкой.
+
 ```rust
 app.tasks.execute(BackgroundTask::SearchPackages("firefox".into()));
 app.tasks.execute(BackgroundTask::InstallPackage("vim".into()));
 app.tasks.execute(BackgroundTask::UpdateSystem);
+app.tasks.execute(BackgroundTask::StartOllama);
 ```
+
+#### `is_busy(&self) -> bool`
+
+Проверяет, выполняется ли задача. Используется для отображения индикатора загрузки.
 
 ---
 
 ### Структура `InputHistory`
 
-**Пример из проекта (src/app/chat.rs:252-266):**
-```rust
-pub fn push(&mut self, input: &str) {
-    let input = input.trim();
-    if input.is_empty() {
-        return;
-    }
-    // Не добавляем дубликаты подряд
-    if self.entries.last().map(|s| s.as_str()) != Some(input) {
-        self.entries.push(input.to_string());
-        if self.entries.len() > MAX_INPUT_HISTORY {
-            self.entries.remove(0);
-        }
-    }
-    self.position = None;
-}
-```
+История введённых команд для навигации стрелками (до 50 записей).
 
-**Пример навигации (src/app/chat.rs:269-286):**
-```rust
-pub fn up(&mut self, current: &str) -> Option<&str> {
-    if self.entries.is_empty() {
-        return None;
-    }
+#### `InputHistory::new() -> Self`
 
-    match self.position {
-        None => {
-            self.current_input = current.to_string();
-            self.position = Some(self.entries.len() - 1);
-        }
-        Some(0) => return Some(&self.entries[0]),
-        Some(pos) => {
-            self.position = Some(pos - 1);
-        }
-    }
+Создаёт пустую историю.
 
-    self.position.map(|p| self.entries[p].as_str())
-}
-```
+#### `push(&mut self, input: &str)`
+
+Добавляет команду. Не добавляет дубликаты подряд и пустые строки.
+
+#### `up(&mut self, current: &str) -> Option<&str>`
+
+Переход вверх (предыдущая команда). При первом вызове сохраняет текущий ввод.
+
+#### `down(&mut self) -> Option<&str>`
+
+Переход вниз (следующая команда). При достижении конца возвращает сохранённый ввод.
+
+#### `reset(&mut self)`
+
+Сбрасывает позицию навигации. Вызывается при ручном вводе текста.
 
 ---
 
@@ -395,18 +385,18 @@ pub fn up(&mut self, current: &str) -> Option<&str> {
 
 ### Структура `Config`
 
-**Пример из проекта (src/app/config.rs:9-15):**
 ```rust
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
-    pub assistant_name: String,
-    pub accent_color: [u8; 3],
-    #[serde(default = "default_ollama_model")]
-    pub ollama_model: String,
+    pub assistant_name: String,        // Имя ассистента (по умолчанию "Альфонс")
+    pub accent_color: [u8; 3],         // RGB цвет акцента (по умолчанию [61, 174, 233])
+    pub ollama_model: String,          // Модель Ollama (по умолчанию "llama3")
 }
 ```
 
-**Пример JSON конфигурации:**
+**Путь файла:** `~/.config/alfons-assistant/config.toml`
+
+**Пример JSON:**
 ```json
 {
   "assistant_name": "Альфонс",
@@ -417,30 +407,28 @@ pub struct Config {
 
 #### `Config::load() -> Self`
 
-**Пример из проекта (src/app/config.rs:33-35):**
+Загружает конфигурацию через `confy`. Возвращает значения по умолчанию при ошибке.
+
 ```rust
-pub fn load() -> Self {
-    confy::load(CONFIG_APP_NAME, "config").unwrap_or_default()
-}
+let config = Config::load();
 ```
 
 #### `Config::save(&self) -> Result<(), String>`
 
-**Пример из проекта (src/app/config.rs:38-41):**
+Сохраняет конфигурацию на диск.
+
 ```rust
-pub fn save(&self) -> Result<(), String> {
-    confy::store(CONFIG_APP_NAME, "config", self)
-        .map_err(|e| format!("Не удалось сохранить настройки: {}", e))
+if let Err(e) = app.config.save() {
+    app.chat.add_message("Система", &e);
 }
 ```
 
-**Пример вызова (src/app/ui/mod.rs:446-448):**
+#### `accent_color_egui(&self) -> egui::Color32`
+
+Конвертирует `[u8; 3]` в `egui::Color32` для использования в UI.
+
 ```rust
-if changed {
-    if let Err(e) = app.config.save() {
-        app.chat.add_message("Система", &e);
-    }
-}
+let accent = app.config.accent_color_egui();
 ```
 
 ---
@@ -451,283 +439,254 @@ if changed {
 
 ### Модуль local_provider
 
+**Файл:** `src/app/ai/local_provider.rs`
+
+AI клиент, работающий через **Ollama Chat API** (`/api/chat`) с поддержкой истории диалога.
+
+#### Внутренние структуры
+
+```rust
+/// Сообщение для Chat API
+struct ChatMessage {
+    role: String,    // "system", "user", "assistant"
+    content: String,
+}
+
+struct OllamaChatRequest {
+    model: String,
+    messages: Vec<ChatMessage>,
+    stream: bool,
+}
+
+struct OllamaChatResponse {
+    message: ChatMessageContent,
+}
+
+struct ChatMessageContent {
+    content: String,
+}
+```
+
 ### Структура `LocalAi`
 
-**Пример из проекта (src/app/ai/local_provider.rs:35-39):**
 ```rust
 pub struct LocalAi {
-    client: Client,
-    model: RwLock<String>,
-    tools: ToolRegistry,
+    client: Client,           // HTTP клиент (reqwest) с таймаутом 60с
+    model: RwLock<String>,    // Текущая модель (потокобезопасная)
+    tools: ToolRegistry,      // Реестр инструментов
 }
 ```
 
-#### `LocalAi::generate(&self, input: &str) -> Result<String, String>`
+#### `LocalAi::new() -> Self`
 
-**Пример из проекта (src/app/ai/local_provider.rs:66-89):**
+Создаёт клиент с таймаутом `OLLAMA_TIMEOUT_SECS` (60 секунд) и моделью по умолчанию.
+
+#### `set_model(&self, model: &str)`
+
+Устанавливает модель. Потокобезопасно через `RwLock`.
+
 ```rust
-pub async fn generate(&self, input: &str) -> Result<String, String> {
-    let payload = OllamaRequest {
-        model: self.get_model(),
-        prompt: input.to_string(),
-        stream: false,
-        system: self.tools.generate_system_prompt(),
-    };
-
-    let response = self
-        .client
-        .post(OLLAMA_URL)
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|e| format!("{}: {}", errors::OLLAMA_CONNECTION, e))?;
-
-    let data: OllamaResponse = response
-        .json()
-        .await
-        .map_err(|e| format!("{}: {}", errors::OLLAMA_PARSE, e))?;
-
-    // Обрабатываем инструменты в ответе
-    Ok(self.process_response(&data.response))
-}
+ai.set_model("alfons");
+ai.set_model("llama3");
 ```
+
+#### `get_model(&self) -> String`
+
+Возвращает текущую модель.
+
+#### `ensure_model(&self) -> Result<(), String>`
+
+*(Приватный, async)* Проверяет наличие модели и автоматически устанавливает при отсутствии:
+1. Проверяет `ollama show <model>`
+2. Если модель `alfons` — сначала качает базовую `llama3`, затем создаёт кастомную
+3. Для других моделей — `ollama pull <model>`
+
+Вызывается автоматически перед каждым запросом к AI.
+
+#### `pull_model(model: &str) -> Result<(), String>`
+
+*(Приватный, async)* Скачивает модель через `ollama pull`.
+
+#### `create_custom_model_auto(&self) -> Result<(), String>`
+
+*(Приватный, async)* Создаёт кастомную модель автоматически. Находит или генерирует Modelfile, затем вызывает `ollama create`.
+
+#### `find_or_create_modelfile() -> Result<PathBuf, String>`
+
+*(Приватный)* Ищет Modelfile в стандартных местах или создаёт новый в конфиг-директории.
+
+**Порядок поиска:**
+1. Рядом с исполняемым файлом
+2. Текущая директория
+3. `~/.config/alfons-assistant/Modelfile`
+
+#### `generate(&self, history: &[(String, String)], input: &str) -> Result<String, String>`
+
+Генерирует ответ AI с учётом истории чата. Основной метод взаимодействия с Ollama.
+
+**Этапы:**
+1. `ensure_model()` — проверка/установка модели
+2. Формирование сообщений: system prompt + история + текущий ввод
+3. POST запрос к `/api/chat`
+4. `process_response()` — обработка `[TOOL:...]` маркеров
+
+```rust
+let history = chat.as_pairs();
+let response = ai.generate(&history, "Который час?").await?;
+// Ответ: "Сейчас 14:30:25"
+```
+
+**Как формируется история:**
+- `"Вы"` → role: `"user"`
+- `"Система"` → пропускается
+- Всё остальное → role: `"assistant"`
 
 #### `process_response(&self, response: &str) -> String`
 
-Обрабатывает маркеры `[TOOL:...]` в ответе AI.
+*(Приватный)* Обрабатывает маркеры `[TOOL:...]` в ответе AI, заменяя их результатами инструментов. Маркеры `[CMD:...]` оставляет как есть для обработки в `assistant_app`.
 
-**Пример из проекта (src/app/ai/local_provider.rs:92-104):**
-```rust
-fn process_response(&self, response: &str) -> String {
-    let tool_re = tool_regex();
-    let with_tools = tool_re.replace_all(response, |caps: &regex::Captures| {
-        let tool = &caps[1];
-        self.tools
-            .execute(tool)
-            .unwrap_or_else(|| format!("[?{}]", tool))
-    });
-
-    with_tools.to_string()
-}
-```
-
-**Пример преобразования:**
 ```
 Вход: "Сейчас [TOOL:время], дата: [TOOL:дата]"
-Выход: "Сейчас 14:30:25, дата: 29.01.2026"
+Выход: "Сейчас 14:30:25, дата: 07.02.2026"
 ```
 
 ---
 
 #### `check_ollama_status() -> bool`
 
-**Пример из проекта (src/app/ai/local_provider.rs:114-126):**
-```rust
-pub async fn check_ollama_status() -> bool {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(2))
-        .build()
-        .unwrap_or_default();
+*(async)* Проверяет, запущен ли сервис Ollama. Отправляет GET на `http://localhost:11434/api/tags` с таймаутом 2 секунды.
 
-    client
-        .get("http://localhost:11434/api/tags")
-        .send()
-        .await
-        .map(|r| r.status().is_success())
-        .unwrap_or(false)
-}
+```rust
+let online = check_ollama_status().await; // true/false
 ```
 
----
+#### `is_custom_model_exists() -> bool`
+
+Проверяет, существует ли кастомная модель `alfons` через `ollama show alfons`.
+
+#### `is_base_model_exists() -> bool`
+
+Проверяет, существует ли базовая модель `llama3` через `ollama show llama3`.
 
 #### `create_custom_model() -> String`
 
-**Пример из проекта (src/app/ai/local_provider.rs:148-207):**
+Создаёт кастомную модель `alfons` из Modelfile. Если базовая модель не найдена — показывает диалог `rfd` с предложением скачать.
+
+**Порядок действий:**
+1. Проверяет наличие базовой модели → предлагает скачать при отсутствии
+2. Проверяет, не существует ли уже `alfons`
+3. Ищет Modelfile или создаёт новый
+4. Выполняет `ollama create alfons -f <Modelfile>`
+
+#### `generate_modelfile_content() -> &'static str`
+
+*(Приватный)* Возвращает содержимое Modelfile с системным промптом, инструментами и правилами поведения AI.
+
+#### `is_ollama_installed() -> bool`
+
+Проверяет, установлена ли Ollama через `which ollama`.
+
+#### `install_ollama() -> String`
+
+Устанавливает Ollama через официальный скрипт (`curl | sh`) в терминале. Возвращает сообщение о результате.
+
 ```rust
-pub fn create_custom_model() -> String {
-    // Проверяем, что базовая модель существует
-    if !is_base_model_exists() {
-        return errors::MODEL_BASE_NOT_FOUND.to_string();
-    }
+let msg = install_ollama(); // "[OK] Установка Ollama запущено в kitty"
+```
 
-    // Проверяем, не существует ли уже модель
-    if is_custom_model_exists() {
-        return messages::MODEL_EXISTS.to_string();
-    }
+#### `start_ollama_service() -> String`
 
-    // Находим путь к Modelfile
-    let modelfile_paths = [
-        std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|p| p.join("Modelfile")))
-            .unwrap_or_default(),
-        std::path::PathBuf::from("Modelfile"),
-        dirs::config_dir()
-            .map(|p| p.join("alfons-assistant").join("Modelfile"))
-            .unwrap_or_default(),
-    ];
+Запускает `ollama serve` в фоне. Ждёт 2 секунды перед возвратом.
 
-    // Создаём модель
-    match Command::new("ollama")
-        .args(["create", OLLAMA_CUSTOM_MODEL, "-f"])
-        .arg(&modelfile)
-        .output()
-    {
-        Ok(output) if output.status.success() => messages::MODEL_CREATED.to_string(),
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            format!("{} ({})", errors::MODEL_CREATE_FAILED, stderr.trim())
-        }
-        Err(e) => format!("{} ({})", errors::MODEL_CREATE_FAILED, e),
-    }
-}
+```rust
+let msg = start_ollama_service(); // "[OK] Сервис Ollama запущен!"
 ```
 
 ---
 
 ### Модуль tools
 
+**Файл:** `src/app/ai/tools.rs`
+
+### Структура `Tool`
+
+```rust
+pub struct Tool {
+    pub name: String,          // Имя инструмента ("время", "дата" и т.д.)
+    pub description: String,   // Описание для системного промпта
+    pub handler: ToolHandler,  // Функция-обработчик fn() -> String
+}
+```
+
 ### Структура `ToolRegistry`
 
-**Пример регистрации инструментов (src/app/ai/tools.rs:22-73):**
+Контейнер для всех инструментов AI.
+
+#### `ToolRegistry::new() -> Self`
+
+Создаёт реестр со следующими встроенными инструментами:
+
+| Инструмент | Описание | Пример вывода |
+|------------|----------|---------------|
+| `время` | Текущее время | `14:30:25` |
+| `дата` | Текущая дата | `07.02.2026` |
+| `дата_и_время` | Дата и время | `07.02.2026 14:30:25` |
+| `список_гайдов` | Список доступных гайдов | `pacman, aur, wifi, systemd, gpu, audio, locale, backup` |
+| `память` | Использование RAM | `4.2G / 16G (использовано)` |
+| `диск` | Использование дисков | `45G / 100G (48%)` |
+| `cpu` | Информация о CPU | `AMD Ryzen 5 5600X (загрузка: 1.23)` |
+| `система` | Общая информация | Память + CPU + Диск |
+
+#### `register(&mut self, name: &str, description: &str, handler: ToolHandler)`
+
+Регистрирует новый инструмент.
+
 ```rust
-pub fn new() -> Self {
-    let mut registry = Self {
-        tools: HashMap::new(),
-    };
+registry.register(
+    "время",
+    "получить текущее время",
+    || Local::now().format("%H:%M:%S").to_string(),
+);
+```
 
-    // Регистрируем базовые инструменты
-    registry.register(
-        "время",
-        "получить текущее время",
-        || Local::now().format("%H:%M:%S").to_string(),
-    );
+#### `execute(&self, name: &str) -> Option<String>`
 
-    registry.register(
-        "дата",
-        "получить текущую дату",
-        || Local::now().format("%d.%m.%Y").to_string(),
-    );
+Выполняет инструмент по имени. Возвращает `None` если инструмент не найден.
 
-    registry.register(
-        "память",
-        "показать использование RAM",
-        get_memory_info,
-    );
-
-    registry.register(
-        "система",
-        "показать общую информацию о системе",
-        || {
-            format!(
-                "Память: {}\nCPU: {}\nДиск: {}",
-                get_memory_info(),
-                get_cpu_info(),
-                get_disk_info()
-            )
-        },
-    );
-
-    registry
-}
+```rust
+let time = registry.execute("время"); // Some("14:30:25")
+let none = registry.execute("неизвестный"); // None
 ```
 
 #### `generate_system_prompt(&self) -> String`
 
-**Пример из проекта (src/app/ai/tools.rs:93-150):**
-```rust
-pub fn generate_system_prompt(&self) -> String {
-    let mut tools_list = String::new();
-    for tool in self.tools.values() {
-        tools_list.push_str(&format!("- [TOOL:{}] - {}\n", tool.name, tool.description));
-    }
-
-    format!(
-        r#"Ты помощник Альфонс для Arch Linux. Отвечай кратко и по делу на русском языке.
-
-ДОСТУПНЫЕ ИНСТРУМЕНТЫ:
-{}
-Формат использования: [TOOL:название]
-
-ДОСТУПНЫЕ КОМАНДЫ (ты можешь выполнять их за пользователя):
-Формат: [CMD:команда]
-
-▸ Базовые:
-  [CMD:очистить] - очистить чат
-  [CMD:помощь] - показать справку
-
-▸ Пакеты (yay/pacman):
-  [CMD:поиск <запрос>] - найти пакеты
-  [CMD:установить <пакет>] - запросить установку
-  [CMD:удалить <пакет>] - запросить удаление
-
-ПРИМЕРЫ:
-- "Который час?" -> "Сейчас [TOOL:время]"
-- "Установи firefox" -> "[CMD:установить firefox]"
-- "Найди пакет vim" -> "[CMD:поиск vim]"
-"#,
-        tools_list
-    )
-}
-```
+Генерирует системный промпт с описанием всех инструментов и команд для AI. Включает:
+- Список `[TOOL:...]` инструментов
+- Список `[CMD:...]` команд
+- Правила поведения AI
+- Примеры использования
 
 ---
+
+#### Вспомогательные функции
 
 #### `get_memory_info() -> String`
 
-**Пример из проекта (src/app/ai/tools.rs:164-181):**
-```rust
-fn get_memory_info() -> String {
-    let output = Command::new("free").args(["-h", "--si"]).output();
+Получает использование RAM через `free -h --si`. Парсит вторую строку вывода.
 
-    match output {
-        Ok(out) => {
-            let text = String::from_utf8_lossy(&out.stdout);
-            // Парсим вторую строку (Mem:)
-            if let Some(line) = text.lines().nth(1) {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 3 {
-                    return format!("{} / {} (использовано)", parts[2], parts[1]);
-                }
-            }
-            "Не удалось получить".into()
-        }
-        Err(_) => "Ошибка выполнения free".into(),
-    }
-}
-```
+**Пример:** `"4.2G / 16G (использовано)"`
 
-**Пример вывода:** `"4.2G / 16G (использовано)"`
+#### `get_disk_info() -> String`
 
----
+Получает использование корневого раздела через `df -h /`.
+
+**Пример:** `"45G / 100G (48%)"`
 
 #### `get_cpu_info() -> String`
 
-**Пример из проекта (src/app/ai/tools.rs:203-222):**
-```rust
-fn get_cpu_info() -> String {
-    // Имя процессора из /proc/cpuinfo
-    let name = std::fs::read_to_string("/proc/cpuinfo")
-        .ok()
-        .and_then(|s| {
-            s.lines()
-                .find(|l| l.starts_with("model name"))
-                .and_then(|l| l.split(':').nth(1))
-                .map(|s| s.trim().to_string())
-        })
-        .unwrap_or_else(|| "Неизвестно".into());
+Получает имя CPU из `/proc/cpuinfo` и загрузку из `/proc/loadavg`.
 
-    // Загрузка из /proc/loadavg
-    let load = std::fs::read_to_string("/proc/loadavg")
-        .ok()
-        .and_then(|s| s.split_whitespace().next().map(|s| s.to_string()))
-        .unwrap_or_else(|| "?".into());
-
-    format!("{} (загрузка: {})", name, load)
-}
-```
-
-**Пример вывода:** `"AMD Ryzen 5 5600X 6-Core Processor (загрузка: 1.23)"`
+**Пример:** `"AMD Ryzen 5 5600X 6-Core Processor (загрузка: 1.23)"`
 
 ---
 
@@ -737,358 +696,143 @@ fn get_cpu_info() -> String {
 
 ### Главная функция process_command
 
-**Пример из проекта (src/app/commands/mod.rs:15-49):**
+Обрабатывает команду и возвращает ответ. Проверяет в порядке приоритета:
+1. Базовые команды (время, дата, помощь)
+2. Системные команды (выключение, перезагрузка)
+3. Пакетный менеджер
+4. Гайды
+
+Логирует все распознанные команды через `command_log`.
+
 ```rust
-pub fn process_command(
-    input: &str,
-    assistant_name: &str,
-    dialog: &mut DialogState,
-    tasks: &TaskManager,
-    guides: &GuideRegistry,
-) -> Option<String> {
-    let cmd = input.trim().to_lowercase();
-
-    // 1. Базовые команды (время, дата, помощь)
-    if let Some(r) = base::process_basic_command(&cmd, assistant_name) {
-        command_log::log_command(&cmd, &r);
-        return Some(r);
-    }
-
-    // 2. Системные команды (выключение, перезагрузка)
-    if let Some(r) = system::process_system_command(&cmd, dialog) {
-        command_log::log_command(&cmd, &r);
-        return Some(r);
-    }
-
-    // 3. Пакетный менеджер
-    if let Some(r) = package::process_package_command(&cmd, dialog, tasks) {
-        command_log::log_command(&cmd, &r);
-        return Some(r);
-    }
-
-    // 4. Гайды
-    if let Some(r) = guide::process_guide_command(&cmd, guides) {
-        command_log::log_command(&cmd, "гайд показан");
-        return Some(r);
-    }
-
-    None
-}
+let response = commands::process_command(
+    &input,           // Текст команды
+    &assistant_name,  // Имя ассистента для приветствия
+    &mut dialog,      // Состояние диалога
+    &tasks,           // Менеджер задач
+    &guides,          // Реестр гайдов
+);
+// Some("Текущее время: 14:30:25") или None если не команда
 ```
 
 ---
 
 ### Модуль base
 
-**Пример из проекта (src/app/commands/base.rs:7-52):**
+**Файл:** `src/app/commands/base.rs`
+
+#### Константа `CMD_CLEAR_CHAT`
+
 ```rust
-pub fn process_basic_command(cmd: &str, assistant_name: &str) -> Option<String> {
-    match cmd {
-        // Приветствие
-        "привет" | "здравствуй" | "хай" | "hello" => Some(format!(
-            "Привет! Я {}, твой помощник для Arch Linux.",
-            assistant_name
-        )),
-
-        // Очистка чата
-        "очистить" | "очистить чат" | "clear" => {
-            Some(CMD_CLEAR_CHAT.to_string())
-        }
-
-        // Повторение фразы
-        cmd if cmd.starts_with("скажи ") => {
-            let message = cmd.trim_start_matches("скажи ").trim();
-            if message.is_empty() {
-                Some("Что именно сказать?".to_string())
-            } else {
-                Some(message.to_string())
-            }
-        }
-
-        // Время
-        "время" | "который час" | "time" => Some(format!(
-            "Текущее время: {}",
-            Local::now().format("%H:%M:%S")
-        )),
-
-        // Дата
-        "дата" | "какое сегодня число" | "date" => {
-            Some(format!("Сегодня: {}", Local::now().format("%d.%m.%Y")))
-        }
-
-        // Помощь
-        "помощь" | "help" | "?" => Some(HELP_TEXT.to_string()),
-
-        _ => None,
-    }
-}
+pub const CMD_CLEAR_CHAT: &str = "COMMAND_ACTION_CLEAR";
 ```
 
-**Текст справки (src/app/commands/base.rs:55-79):**
-```rust
-const HELP_TEXT: &str = "\
-📋 Доступные команды:
+Маркер, перехватываемый в `assistant_app` для очистки чата.
 
-▸ Базовые:
-  время, дата, дата и время
+#### `process_basic_command(cmd: &str, assistant_name: &str) -> Option<String>`
 
-▸ Пакеты (через yay):
-  поиск <запрос>
-  установить <пакет>
-  удалить <пакет>
-  обновить систему
-
-▸ Система:
-  выключить пк
-  перезагрузить
-
-▸ Гайды:
-  гайды — список всех гайдов
-  гайд <тема> — показать гайд
-
-▸ Прочее:
-  очистить — очистить чат
-  помощь — эта справка
-
-💡 Или просто задайте вопрос — ИИ постарается помочь!";
-```
+| Команда | Алиасы | Действие |
+|---------|--------|----------|
+| `привет` | `здравствуй`, `хай`, `hello` | Приветствие |
+| `очистить` | `очистить чат`, `clear` | Возвращает `CMD_CLEAR_CHAT` |
+| `скажи <текст>` | — | Повторяет текст |
+| `время` | `который час`, `time` | Текущее время |
+| `дата` | `какое сегодня число`, `date` | Текущая дата |
+| `дата и время` | — | Дата и время |
+| `помощь` | `help`, `?` | Справка по командам |
 
 ---
 
 ### Модуль package
 
-**Пример из проекта (src/app/commands/package.rs:9-72):**
-```rust
-pub fn process_package_command(
-    cmd: &str,
-    dialog: &mut DialogState,
-    tasks: &TaskManager,
-) -> Option<String> {
-    // Открыть диалог поиска
-    if cmd == "поиск пакетов" || cmd == "найти пакеты" {
-        dialog.show_search();
-        return Some("Открываю поиск пакетов...".into());
-    }
+**Файл:** `src/app/commands/package.rs`
 
-    // Установка: "установить <пакет>"
-    if let Some(package) = cmd.strip_prefix("установить ") {
-        let package = package.trim();
-        if package.is_empty() {
-            return Some("Укажите пакет. Пример: установить firefox".into());
-        }
-        dialog.show_confirm(
-            "Установка пакета",
-            &format!("Установить '{}' через yay?", package),
-            package,
-        );
-        return Some(format!("Подготовка к установке '{}'...", package));
-    }
+#### `process_package_command(cmd: &str, dialog: &mut DialogState, tasks: &TaskManager) -> Option<String>`
 
-    // Удаление: "удалить <пакет>"
-    if let Some(package) = cmd.strip_prefix("удалить ") {
-        let package = package.trim();
-        dialog.show_confirm(
-            "Удаление пакета",
-            &format!("Удалить '{}' из системы?", package),
-            package,
-        );
-        return Some(format!("Подготовка к удалению '{}'...", package));
-    }
+| Команда | Действие |
+|---------|----------|
+| `поиск пакетов`, `найти пакеты` | Открывает диалог поиска |
+| `установить <пакет>` | Открывает диалог подтверждения установки |
+| `удалить <пакет>` | Открывает диалог подтверждения удаления |
+| `обновить систему`, `обновить`, `обновление` | Диалог подтверждения обновления |
+| `поиск <запрос>` | Запускает фоновый поиск через yay |
 
-    // Обновление системы
-    if cmd == "обновить систему" || cmd == "обновить" {
-        dialog.show_confirm(
-            "Обновление системы",
-            "Выполнить полное обновление (yay -Syu)?",
-            "",
-        );
-        return Some("Подготовка к обновлению...".into());
-    }
+#### `search_packages(query: &str) -> String`
 
-    // Быстрый поиск: "поиск <запрос>"
-    if let Some(query) = cmd.strip_prefix("поиск ") {
-        let query = query.trim();
-        if !query.is_empty() {
-            tasks.execute(BackgroundTask::SearchPackages(query.into()));
-            return Some(format!("Ищу пакеты '{}'...", query));
-        }
-    }
+Поиск пакетов через `yay -Ss <query>`. Возвращает результат или "Ничего не найдено."
 
-    None
-}
-```
+#### `install_package(package: &str) -> String`
 
----
+Запускает `yay -S <пакет>` в терминале для интерактивного sudo.
 
-#### `run_in_terminal(cmd: &str, action: &str) -> String`
+#### `remove_package(package: &str) -> String`
 
-**Пример из проекта (src/app/commands/package.rs:156-189):**
-```rust
-fn run_in_terminal(cmd: &str, action: &str) -> String {
-    let de = DesktopEnvironment::detect();
-    let terminals = de.terminal_priority();
+Запускает `yay -R <пакет>` в терминале.
 
-    for term in terminals {
-        // Проверяем, установлен ли терминал
-        if !Command::new("which")
-            .arg(term)
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-        {
-            continue;
-        }
+#### `update_system() -> String`
 
-        // Получаем аргументы для терминала
-        let args = match get_terminal_args(term, cmd) {
-            Some(a) => a,
-            None => continue,
-        };
+Запускает `yay -Syu` в терминале.
 
-        // Запускаем
-        match Command::new(term).args(&args).spawn() {
-            Ok(_) => return format!("[OK] {} запущено в {}", action, term),
-            Err(_) => continue,
-        }
-    }
+#### `is_yay_installed() -> bool`
 
-    format!(
-        "[X] Не найден терминал для {}. Установите {}.",
-        de.name(),
-        de.preferred_terminal()
-    )
-}
-```
-
----
+Проверяет наличие yay через `which yay`.
 
 #### `install_yay() -> String`
 
-**Пример из проекта (src/app/commands/package.rs:207-254):**
-```rust
-pub fn install_yay() -> String {
-    if is_yay_installed() {
-        return messages::YAY_ALREADY.into();
-    }
+Устанавливает yay из AUR:
+1. Устанавливает зависимости (`git`, `base-devel`) через `pkexec pacman`
+2. Клонирует `https://aur.archlinux.org/yay.git` в `/tmp/yay-install`
+3. Собирает через `makepkg -si --noconfirm`
+4. Очищает `/tmp/yay-install`
 
-    // 1. Установка зависимостей
-    let deps = Command::new("pkexec")
-        .args([
-            "pacman", "-S", "--needed", "--noconfirm",
-            "git", "base-devel",
-        ])
-        .status();
+#### `run_in_terminal(cmd: &str, action: &str) -> String`
 
-    if deps.is_err() || !deps.unwrap().success() {
-        return errors::YAY_DEPS_FAILED.into();
-    }
-
-    // 2. Клонирование репозитория
-    let _ = Command::new("rm").args(["-rf", YAY_INSTALL_DIR]).status();
-
-    let clone = Command::new("git")
-        .args(["clone", YAY_AUR_URL, YAY_INSTALL_DIR])
-        .status();
-
-    if clone.is_err() || !clone.unwrap().success() {
-        return errors::YAY_CLONE_FAILED.into();
-    }
-
-    // 3. Сборка и установка
-    let build = Command::new("sh")
-        .args([
-            "-c",
-            &format!("cd {} && makepkg -si --noconfirm", YAY_INSTALL_DIR),
-        ])
-        .status();
-
-    // Очистка
-    let _ = Command::new("rm").args(["-rf", YAY_INSTALL_DIR]).status();
-
-    match build {
-        Ok(s) if s.success() && is_yay_installed() => messages::YAY_INSTALLED.into(),
-        _ => errors::YAY_BUILD_FAILED.into(),
-    }
-}
-```
+*(Приватный)* Запускает команду в терминале с учётом текущего DE.
 
 ---
 
 ### Модуль system
 
-**Пример из проекта (src/app/commands/system.rs:7-27):**
-```rust
-pub fn process_system_command(cmd: &str, dialog: &mut DialogState) -> Option<String> {
-    match cmd {
-        "выключить пк" | "выключить компьютер" => {
-            dialog.show_confirm(
-                "Выключение компьютера",
-                "Вы уверены, что хотите выключить компьютер?",
-                "__shutdown__",
-            );
-            Some("Подтвердите выключение...".into())
-        }
-        "перезагрузить" | "рестарт" => {
-            dialog.show_confirm(
-                "Перезагрузка",
-                "Вы уверены, что хотите перезагрузить компьютер?",
-                "__reboot__",
-            );
-            Some("Подтвердите перезагрузку...".into())
-        }
-        _ => None,
-    }
-}
-```
+**Файл:** `src/app/commands/system.rs`
+
+#### `process_system_command(cmd: &str, dialog: &mut DialogState) -> Option<String>`
+
+| Команда | Алиасы | Действие |
+|---------|--------|----------|
+| `выключить пк` | `выключить компьютер` | Диалог подтверждения выключения |
+| `перезагрузить` | `рестарт` | Диалог подтверждения перезагрузки |
+
+#### `execute_shutdown() -> String`
+
+Выполняет `shutdown -h now`. Вызывается после подтверждения.
+
+#### `execute_reboot() -> String`
+
+Выполняет `shutdown -r now`. Вызывается после подтверждения.
 
 ---
 
 ### Модуль guide
 
-**Пример из проекта (src/app/commands/guide.rs:4-65):**
-```rust
-pub fn process_guide_command(cmd: &str, guides: &GuideRegistry) -> Option<String> {
-    // Список всех гайдов
-    if cmd == "гайды" || cmd == "guides" || cmd == "обучение" {
-        return Some(guides.format_list());
-    }
+**Файл:** `src/app/commands/guide.rs`
 
-    // Показать конкретный гайд: "гайд pacman"
-    if cmd.starts_with("гайд ") || cmd.starts_with("guide ") {
-        let guide_id = cmd
-            .trim_start_matches("гайд ")
-            .trim_start_matches("guide ")
-            .trim();
+#### `process_guide_command(cmd: &str, guides: &GuideRegistry) -> Option<String>`
 
-        if let Some(guide) = guides.get(guide_id) {
-            return Some(guide.format());
-        }
+| Команда | Действие |
+|---------|----------|
+| `гайды`, `guides`, `обучение` | Список всех гайдов |
+| `гайд <тема>`, `guide <тема>` | Показать гайд (точное совпадение или поиск) |
+| `найти гайд <запрос>`, `поиск гайдов <запрос>` | Поиск по гайдам |
 
-        // Поиск по ключевому слову
-        let results = guides.search(guide_id);
-        if results.is_empty() {
-            return Some(format!(
-                "Гайд '{}' не найден.\n\nИспользуйте 'гайды' для списка.",
-                guide_id
-            ));
-        } else if results.len() == 1 {
-            return Some(results[0].format());
-        } else {
-            let mut output = format!(
-                "Найдено {} гайдов по запросу '{}':\n\n",
-                results.len(), guide_id
-            );
-            for guide in results {
-                output.push_str(&format!("• {} — {}\n", guide.id, guide.title));
-            }
-            output.push_str("\nУточните запрос: гайд <название>");
-            return Some(output);
-        }
-    }
+Если по запросу найден один гайд — показывает его. Если несколько — показывает список.
 
-    None
-}
-```
+---
+
+### Модуль applications (заглушка)
+
+**Файл:** `src/app/commands/applications.rs`
+
+Заготовка для будущей поддержки установки популярных приложений. Пока не подключён к `process_command()`.
 
 ---
 
@@ -1098,62 +842,45 @@ pub fn process_guide_command(cmd: &str, guides: &GuideRegistry) -> Option<String
 
 ### Структура `GuideStep`
 
-**Пример из проекта (src/app/guides/mod.rs:4-29):**
 ```rust
 pub struct GuideStep {
-    pub instruction: String,
-    pub command: Option<String>,
-    pub note: Option<String>,
+    pub instruction: String,       // Текст инструкции
+    pub command: Option<String>,   // Команда терминала (опционально)
+    pub note: Option<String>,      // Примечание (опционально)
 }
+```
 
-impl GuideStep {
-    pub fn new(instruction: &str) -> Self {
-        Self {
-            instruction: instruction.to_string(),
-            command: None,
-            note: None,
-        }
-    }
-
-    pub fn with_command(mut self, cmd: &str) -> Self {
-        self.command = Some(cmd.to_string());
-        self
-    }
-
-    pub fn with_note(mut self, note: &str) -> Self {
-        self.note = Some(note.to_string());
-        self
-    }
-}
+**Builder-паттерн:**
+```rust
+GuideStep::new("Установить пакет")
+    .with_command("sudo pacman -S <пакет>")
+    .with_note("Потребуется пароль root")
 ```
 
 ---
 
 ### Структура `Guide`
 
-#### `Guide::format(&self) -> String`
-
-**Пример из проекта (src/app/guides/mod.rs:63-80):**
 ```rust
-pub fn format(&self) -> String {
-    let mut output = format!(" {}\n{}\n\n", self.title, self.description);
-
-    for (i, step) in self.steps.iter().enumerate() {
-        output.push_str(&format!("{}. {}\n", i + 1, step.instruction));
-
-        if let Some(cmd) = &step.command {
-            output.push_str(&format!("   $ {}\n", cmd));
-        }
-
-        if let Some(note) = &step.note {
-            output.push_str(&format!("   ℹ {}\n", note));
-        }
-        output.push('\n');
-    }
-
-    output
+pub struct Guide {
+    pub id: String,            // Идентификатор ("pacman", "wifi")
+    pub title: String,         // Заголовок
+    pub description: String,   // Описание
+    pub steps: Vec<GuideStep>, // Шаги
+    pub tags: Vec<String>,     // Теги для поиска
 }
 ```
+
+**Builder-паттерн:**
+```rust
+Guide::new("pacman", "Основы Pacman", "Базовые команды...")
+    .add_tags(&["пакеты", "установка"])
+    .add_step(GuideStep::new("Обновить").with_command("sudo pacman -Syu"))
+```
+
+#### `Guide::format(&self) -> String`
+
+Форматирует гайд для вывода в чат.
 
 **Пример вывода:**
 ```
@@ -1163,47 +890,46 @@ pub fn format(&self) -> String {
 1. Обновить список пакетов и систему
    $ sudo pacman -Syu
    ℹ Рекомендуется делать перед установкой новых пакетов
-
-2. Установить пакет
-   $ sudo pacman -S <пакет>
 ```
 
 ---
 
-### Пример регистрации гайда
+### Структура `GuideRegistry`
 
-**Пример из проекта (src/app/guides/mod.rs:141-168):**
-```rust
-// Pacman
-self.register(
-    Guide::new(
-        "pacman",
-        "Основы Pacman",
-        "Базовые команды пакетного менеджера Arch Linux",
-    )
-    .add_tags(&["пакеты", "установка", "обновление", "packages"])
-    .add_step(
-        GuideStep::new("Обновить список пакетов и систему")
-            .with_command("sudo pacman -Syu")
-            .with_note("Рекомендуется делать перед установкой новых пакетов"),
-    )
-    .add_step(GuideStep::new("Установить пакет").with_command("sudo pacman -S <пакет>"))
-    .add_step(GuideStep::new("Удалить пакет").with_command("sudo pacman -R <пакет>"))
-    .add_step(
-        GuideStep::new("Удалить пакет с зависимостями")
-            .with_command("sudo pacman -Rns <пакет>")
-            .with_note("Удаляет также неиспользуемые зависимости и конфиги"),
-    )
-    .add_step(GuideStep::new("Поиск пакета").with_command("pacman -Ss <запрос>"))
-    .add_step(GuideStep::new("Информация о пакете").with_command("pacman -Si <пакет>"))
-    .add_step(GuideStep::new("Список установленных пакетов").with_command("pacman -Q"))
-    .add_step(
-        GuideStep::new("Очистить кэш пакетов")
-            .with_command("sudo pacman -Sc")
-            .with_note("Удаляет старые версии из /var/cache/pacman/pkg"),
-    ),
-);
-```
+Контейнер всех гайдов (HashMap по id).
+
+#### `GuideRegistry::new() -> Self`
+
+Создаёт реестр и регистрирует встроенные гайды.
+
+#### `register(&mut self, guide: Guide)`
+
+Регистрирует гайд.
+
+#### `get(&self, id: &str) -> Option<&Guide>`
+
+Получить гайд по точному ID.
+
+#### `search(&self, query: &str) -> Vec<&Guide>`
+
+Поиск по ключевому слову в названии, описании, тегах и ID (без учёта регистра).
+
+#### `format_list(&self) -> String`
+
+Форматирует список всех гайдов, отсортированный по названию.
+
+#### Встроенные гайды
+
+| ID | Название | Теги |
+|----|----------|------|
+| `pacman` | Основы Pacman | пакеты, установка, обновление |
+| `aur` | Работа с AUR | yay, aur, репозиторий |
+| `wifi` | Настройка WiFi | сеть, интернет, wireless |
+| `systemd` | Управление сервисами | сервисы, службы, демоны |
+| `gpu` | Драйверы видеокарты | nvidia, amd, intel |
+| `audio` | Настройка звука | pipewire, pulseaudio |
+| `locale` | Локализация системы | язык, раскладка, клавиатура |
+| `backup` | Резервное копирование | timeshift, снимки |
 
 ---
 
@@ -1211,121 +937,95 @@ self.register(
 
 **Файл:** `src/app/ui/`
 
+### Главный модуль (mod.rs)
+
+#### `render(ctx: &egui::Context, app: &mut AssistantApp)`
+
+Главная функция рендеринга. Вызывает:
+1. `handle_hotkeys()` — горячие клавиши
+2. `render_header()` — шапка
+3. `render_settings()` — панель настроек (если открыта)
+4. `render_input()` — поле ввода
+5. `render_chat()` — область чата
+6. `dialogs::render()` — модальный диалог (если виден)
+
+#### `handle_hotkeys(ctx, app)`
+
+| Клавиша | Действие |
+|---------|----------|
+| `Ctrl+L` | Очистить чат |
+| `Escape` | Закрыть диалог или панель настроек |
+
+#### `render_header(ctx, app, accent)`
+
+Отображает шапку с:
+- Названием ассистента (КАПСОМ, цвет акцента)
+- Индикатором Ollama (`[ON]`/`[OFF]`)
+- Кнопкой настроек `[=]`
+- Индикатором загрузки «Обработка...»
+
+#### `render_settings(ctx, app, accent)`
+
+Боковая панель настроек (ширина 280px) с прокруткой:
+- **Персонализация:** выбор цвета темы
+- **ИИ (Ollama):** статус, установка, запуск, выбор модели, создание кастомной модели
+- **Чат:** кнопка очистки
+- **Пакетный менеджер:** статус yay, установка
+- **Горячие клавиши:** справка
+- **О программе:** версия, DE
+- **Установка:** установка/удаление из системы, проверка PATH
+
+#### `render_chat(ctx, app, accent)`
+
+Область чата с автопрокруткой к последнему сообщению.
+
+#### `render_input(ctx, app, accent)`
+
+Нижняя панель с полем ввода и кнопкой «ОТПРАВИТЬ». Поддержка:
+- Enter для отправки
+- Стрелки вверх/вниз для навигации по истории
+
+---
+
 ### Модуль widgets
+
+**Файл:** `src/app/ui/widgets.rs`
 
 #### `render_message(ui, msg, accent)`
 
-**Пример из проекта (src/app/ui/widgets.rs:7-92):**
-```rust
-pub fn render_message(ui: &mut egui::Ui, msg: &ChatMessage, accent: egui::Color32) {
-    let is_user = msg.sender == "Вы";
-
-    // Цвета
-    let (bg, border, name_color) = if is_user {
-        (
-            egui::Color32::from_rgb(40, 80, 120),
-            egui::Color32::from_rgb(60, 120, 180),
-            egui::Color32::LIGHT_BLUE,
-        )
-    } else {
-        (
-            egui::Color32::from_gray(40),
-            accent.gamma_multiply(0.3),
-            accent,
-        )
-    };
-
-    // Скругления (разные для пользователя и ассистента)
-    let rounding = egui::Rounding {
-        nw: 15.0,
-        ne: 15.0,
-        sw: if is_user { 15.0 } else { 2.0 },
-        se: if is_user { 2.0 } else { 15.0 },
-    };
-
-    // Выравнивание
-    let layout = if is_user {
-        egui::Layout::right_to_left(egui::Align::TOP)
-    } else {
-        egui::Layout::left_to_right(egui::Align::TOP)
-    };
-
-    // Максимальная ширина пузыря - 70%
-    let max_bubble_width = ui.available_width() * 0.7;
-
-    ui.with_layout(layout, |ui| {
-        egui::Frame::none()
-            .fill(bg)
-            .stroke(egui::Stroke::new(1.0, border))
-            .rounding(rounding)
-            .inner_margin(12.0)
-            .show(ui, |ui| {
-                ui.set_max_width(max_bubble_width);
-
-                // Заголовок: имя + время
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(&msg.sender).strong().color(name_color));
-                    ui.label(egui::RichText::new(" · ").weak());
-                    ui.label(egui::RichText::new(
-                        msg.timestamp.format("%H:%M").to_string()
-                    ).color(egui::Color32::GRAY));
-                });
-
-                // Текст с копированием по клику
-                let text_response = ui.add(
-                    egui::Label::new(egui::RichText::new(&msg.text).color(egui::Color32::WHITE))
-                        .wrap(true)
-                        .sense(egui::Sense::click()),
-                );
-
-                if text_response.clicked() {
-                    ui.output_mut(|o| o.copied_text = msg.text.clone());
-                }
-                text_response.on_hover_text("Нажмите чтобы скопировать");
-            });
-    });
-}
-```
+Отрисовывает сообщение в виде «пузыря» (bubble):
+- Сообщения пользователя — справа, синий фон
+- Сообщения ассистента/системы — слева, серый фон с акцентом
+- Заголовок: имя + время
+- Скругления: разные для пользователя и ассистента
+- Максимальная ширина 70%
+- Клик по тексту — копирование в буфер обмена
 
 ---
 
 ### Модуль dialogs
 
+**Файл:** `src/app/ui/dialogs.rs`
+
+#### `render(ctx, app, accent)`
+
+Модальный диалог с затемнением фона (чёрный с 63% прозрачности). Содержит:
+- Заголовок
+- Сообщение
+- Поле ввода (для `PackageSearch`)
+- Имя пакета (для `Confirmation`)
+- Кнопки «Отмена» и действие
+
 #### `handle_action(app: &mut AssistantApp)`
 
-**Пример из проекта (src/app/ui/dialogs.rs:105-135):**
-```rust
-fn handle_action(app: &mut AssistantApp) {
-    match app.dialog.dialog_type {
-        DialogType::PackageSearch => {
-            if !app.dialog.input.is_empty() {
-                app.tasks.execute(
-                    BackgroundTask::SearchPackages(app.dialog.input.clone())
-                );
-            }
-        }
-        DialogType::Confirmation => {
-            let title = &app.dialog.title;
-            let package = &app.dialog.package;
-
-            if title.contains("Установка") && !package.is_empty() {
-                app.tasks.execute(BackgroundTask::InstallPackage(package.clone()));
-            } else if title.contains("Удаление") && !package.is_empty() {
-                app.tasks.execute(BackgroundTask::RemovePackage(package.clone()));
-            } else if title.contains("Обновление") {
-                app.tasks.execute(BackgroundTask::UpdateSystem);
-            } else if package == "__shutdown__" {
-                app.tasks.execute(BackgroundTask::ShutdownSystem);
-            } else if package == "__reboot__" {
-                app.tasks.execute(BackgroundTask::RebootSystem);
-            }
-        }
-        DialogType::Info => {}
-    }
-
-    app.dialog.hide();
-}
-```
+*(Приватный)* Обрабатывает подтверждение:
+- `PackageSearch` → `BackgroundTask::SearchPackages`
+- `Confirmation` → определяет действие по заголовку:
+  - "Установка" → `BackgroundTask::InstallPackage`
+  - "Удаление" → `BackgroundTask::RemovePackage`
+  - "Обновление" → `BackgroundTask::UpdateSystem`
+  - `__shutdown__` → `BackgroundTask::ShutdownSystem`
+  - `__reboot__` → `BackgroundTask::RebootSystem`
 
 ---
 
@@ -1333,106 +1033,84 @@ fn handle_action(app: &mut AssistantApp) {
 
 **Файл:** `src/app/desktop.rs`
 
-### DesktopEnvironment::detect()
+### Перечисление `DesktopEnvironment`
 
-**Пример из проекта (src/app/desktop.rs:17-58):**
 ```rust
-pub fn detect() -> Self {
-    // Проверяем XDG_CURRENT_DESKTOP
-    if let Ok(desktop) = env::var("XDG_CURRENT_DESKTOP") {
-        let desktop = desktop.to_lowercase();
-        if desktop.contains("gnome") || desktop.contains("unity") || desktop.contains("budgie") {
-            return Self::Gnome;
-        }
-        if desktop.contains("kde") || desktop.contains("plasma") {
-            return Self::Kde;
-        }
-        if desktop.contains("xfce") {
-            return Self::Xfce;
-        }
-    }
-
-    // Проверяем DESKTOP_SESSION
-    if let Ok(session) = env::var("DESKTOP_SESSION") {
-        let session = session.to_lowercase();
-        if session.contains("gnome") || session.contains("ubuntu") {
-            return Self::Gnome;
-        }
-        if session.contains("plasma") || session.contains("kde") {
-            return Self::Kde;
-        }
-    }
-
-    // Проверяем KDE_FULL_SESSION
-    if env::var("KDE_FULL_SESSION").is_ok() {
-        return Self::Kde;
-    }
-
-    // Проверяем GNOME_DESKTOP_SESSION_ID
-    if env::var("GNOME_DESKTOP_SESSION_ID").is_ok() {
-        return Self::Gnome;
-    }
-
-    Self::Other
+pub enum DesktopEnvironment {
+    Gnome,
+    Kde,
+    Xfce,
+    Other,  // по умолчанию
 }
 ```
+
+#### `DesktopEnvironment::detect() -> Self`
+
+Определяет DE по переменным окружения:
+1. `XDG_CURRENT_DESKTOP` — gnome/unity/budgie, kde/plasma, xfce
+2. `DESKTOP_SESSION` — gnome/ubuntu, plasma/kde, xfce
+3. `KDE_FULL_SESSION` → Kde
+4. `GNOME_DESKTOP_SESSION_ID` → Gnome
+5. Иначе → Other
+
+#### `preferred_terminal(&self) -> &'static str`
+
+| DE | Терминал |
+|----|----------|
+| Gnome | `gnome-terminal` |
+| Kde | `konsole` |
+| Xfce | `xfce4-terminal` |
+| Other | `xterm` |
+
+#### `terminal_priority(&self) -> Vec<&'static str>`
+
+Список терминалов в порядке приоритета для каждого DE. Используется при запуске команд.
+
+| DE | Приоритет |
+|----|-----------|
+| Gnome | gnome-terminal, kgx, alacritty, kitty, xterm |
+| Kde | konsole, alacritty, kitty, xterm |
+| Xfce | xfce4-terminal, alacritty, kitty, xterm |
+| Other | alacritty, kitty, gnome-terminal, konsole, xfce4-terminal, xterm |
+
+#### `name(&self) -> &'static str`
+
+Название DE для отображения: "GNOME", "KDE Plasma", "Xfce", "Linux".
 
 ---
 
-### DesktopEnvironment::terminal_priority()
+### Структура `DeStyles`
 
-**Пример из проекта (src/app/desktop.rs:71-91):**
 ```rust
-pub fn terminal_priority(&self) -> Vec<&'static str> {
-    match self {
-        Self::Gnome => vec![
-            "gnome-terminal",
-            "kgx", // GNOME Console
-            "alacritty",
-            "kitty",
-            "xterm",
-        ],
-        Self::Kde => vec!["konsole", "alacritty", "kitty", "xterm"],
-        Self::Xfce => vec!["xfce4-terminal", "alacritty", "kitty", "xterm"],
-        Self::Other => vec![
-            "alacritty",
-            "kitty",
-            "gnome-terminal",
-            "konsole",
-            "xfce4-terminal",
-            "xterm",
-        ],
-    }
+pub struct DeStyles {
+    pub rounding: f32,  // Скругление элементов UI
+    pub spacing: f32,   // Отступы между элементами
 }
 ```
+
+#### `DeStyles::for_de(de: DesktopEnvironment) -> Self`
+
+| DE | Скругление | Отступы |
+|----|-----------|---------|
+| Gnome | 12.0 | 12.0 |
+| Kde | 6.0 | 10.0 |
+| Xfce | 4.0 | 8.0 |
+| Other | 8.0 | 10.0 |
 
 ---
 
-### DeStyles::for_de()
+#### `run_in_terminal(cmd: &str, action: &str) -> String`
 
-**Пример из проекта (src/app/desktop.rs:111-132):**
+Запускает команду в первом доступном терминале с учётом DE. Перебирает терминалы по приоритету, проверяя их наличие через `which`.
+
 ```rust
-pub fn for_de(de: DesktopEnvironment) -> Self {
-    match de {
-        DesktopEnvironment::Gnome => Self {
-            rounding: 12.0, // GNOME использует более округлые формы
-            spacing: 12.0,
-        },
-        DesktopEnvironment::Kde => Self {
-            rounding: 6.0, // KDE более строгий
-            spacing: 10.0,
-        },
-        DesktopEnvironment::Xfce => Self {
-            rounding: 4.0, // Xfce минималистичный
-            spacing: 8.0,
-        },
-        DesktopEnvironment::Other => Self {
-            rounding: 8.0,
-            spacing: 10.0,
-        },
-    }
-}
+let result = run_in_terminal("curl -fsSL https://ollama.com/install.sh | sh", "Установка Ollama");
+// "[OK] Установка Ollama запущено в kitty"
 ```
+
+#### `get_terminal_args(term: &str, cmd: &str) -> Option<Vec<String>>`
+
+*(Приватный)* Формирует аргументы запуска для конкретного терминала. Поддерживает: kitty, alacritty, gnome-terminal, kgx, konsole, xfce4-terminal, xterm.
 
 ---
 
@@ -1440,105 +1118,88 @@ pub fn for_de(de: DesktopEnvironment) -> Self {
 
 **Файл:** `src/app/installer.rs`
 
-### install() -> InstallResult
+### Константы
 
-**Пример из проекта (src/app/installer.rs:37-124):**
 ```rust
-pub fn install() -> InstallResult {
-    let home = match dirs::home_dir() {
-        Some(h) => h,
-        None => {
-            return InstallResult {
-                message: "[X] Не удалось определить домашнюю директорию".into(),
-            }
-        }
-    };
+const INSTALL_BIN_PATH: &str = ".local/bin/alfons";
+const DESKTOP_FILE_PATH: &str = ".local/share/applications/alfons.desktop";
+const ICON_PATH: &str = ".local/share/icons/alfons.png";
+```
 
-    // Находим текущий бинарник
-    let current_exe = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(e) => {
-            return InstallResult {
-                message: format!("[X] Не удалось найти исполняемый файл: {}", e),
-            }
-        }
-    };
+### Структура `InstallResult`
 
-    // Создаём директории
-    let bin_dir = home.join(".local/bin");
-    let desktop_dir = home.join(".local/share/applications");
-    let icon_dir = home.join(".local/share/icons");
-
-    for dir in [&bin_dir, &desktop_dir, &icon_dir] {
-        if let Err(e) = fs::create_dir_all(dir) {
-            return InstallResult {
-                message: format!("[X] Не удалось создать директорию: {}", e),
-            };
-        }
-    }
-
-    // Копируем бинарник
-    let bin_path = home.join(INSTALL_BIN_PATH);
-    if let Err(e) = fs::copy(&current_exe, &bin_path) {
-        return InstallResult {
-            message: format!("[X] Не удалось скопировать бинарник: {}", e),
-        };
-    }
-
-    // Устанавливаем права на исполнение
-    if let Err(e) = fs::set_permissions(&bin_path, fs::Permissions::from_mode(0o755)) {
-        return InstallResult {
-            message: format!("[X] Не удалось установить права: {}", e),
-        };
-    }
-
-    // Создаём .desktop файл
-    let desktop_path = home.join(DESKTOP_FILE_PATH);
-    let desktop_content = generate_desktop_file(&bin_path, &icon_path);
-    if let Err(e) = fs::write(&desktop_path, desktop_content) {
-        return InstallResult {
-            message: format!("[X] Не удалось создать .desktop файл: {}", e),
-        };
-    }
-
-    // Обновляем кэш desktop-файлов
-    let _ = Command::new("update-desktop-database").arg(desktop_dir).output();
-
-    InstallResult {
-        message: format!(
-            "[OK] Альфонс установлен!\n\
-             Бинарник: {}\n\
-             Ярлык добавлен в меню приложений.",
-            bin_path.display()
-        ),
-    }
+```rust
+pub struct InstallResult {
+    pub message: String,
 }
+```
+
+#### `is_installed() -> bool`
+
+Проверяет наличие бинарника и .desktop файла.
+
+#### `get_installed_path() -> Option<PathBuf>`
+
+Возвращает путь к установленному бинарнику (`~/.local/bin/alfons`).
+
+#### `install() -> InstallResult`
+
+Устанавливает приложение в систему:
+1. Находит текущий бинарник
+2. Создаёт директории (`~/.local/bin`, `~/.local/share/applications`, `~/.local/share/icons`)
+3. Копирует бинарник с правами 0o755
+4. Ищет или генерирует иконку (PNG/SVG)
+5. Создаёт `.desktop` файл
+6. Обновляет кэш desktop-файлов
+
+#### `uninstall() -> InstallResult`
+
+Удаляет бинарник, .desktop файл и иконку.
+
+#### `find_custom_icon() -> Option<PathBuf>`
+
+*(Приватный)* Ищет иконку в стандартных местах:
+1. Рядом с исполняемым файлом
+2. Текущая директория
+3. `assets/`
+4. `~/.config/alfons-assistant/`
+
+Поддерживаемые имена: `icon.png`, `icon.svg`, `alfons.png`, `alfons.svg`, `alfons-icon.png`, `alfons-icon.svg`
+
+#### `generate_desktop_file(bin_path, icon_path) -> String`
+
+*(Приватный)* Генерирует содержимое `.desktop` файла в формате XDG.
+
+#### `generate_icon_svg() -> &'static str`
+
+*(Приватный)* Генерирует SVG иконку с буквой «A» на голубом градиентном фоне.
+
+#### `is_local_bin_in_path() -> bool`
+
+Проверяет, есть ли `~/.local/bin` в переменной `PATH`.
+
+#### `get_path_export_command() -> String`
+
+Возвращает строку для добавления в `.bashrc`/`.zshrc`:
+```bash
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 ---
 
-### generate_desktop_file()
+## Модуль command_log
 
-**Пример из проекта (src/app/installer.rs:227-244):**
-```rust
-fn generate_desktop_file(bin_path: &Path, icon_path: &Path) -> String {
-    format!(
-        r#"[Desktop Entry]
-Name=Альфонс
-GenericName=AI Assistant
-Comment=Помощник для Arch Linux с AI интеграцией
-Exec={}
-Icon={}
-Terminal=false
-Type=Application
-Categories=Utility;System;
-Keywords=arch;linux;ai;assistant;ollama;
-StartupNotify=true
-"#,
-        bin_path.display(),
-        icon_path.display()
-    )
-}
+**Файл:** `src/app/command_log.rs`
+
+#### `log_command(command: &str, result: &str)`
+
+Записывает выполненную команду в лог-файл.
+
+**Путь:** `~/.local/share/alfons-assistant/commands.log`
+
+**Формат записи:**
+```
+[2026-02-07 14:30:25] CMD: время -> Текущее время: 14:30:25
 ```
 
 ---
@@ -1547,65 +1208,72 @@ StartupNotify=true
 
 **Файл:** `src/app/constants.rs`
 
-### Все константы
+### Константы приложения
 
-**Пример из проекта (src/app/constants.rs:1-65):**
-```rust
-// === Приложение ===
-pub const APP_NAME: &str = "Альфонс";
-pub const APP_VERSION: &str = "0.0.5";
-pub const DEFAULT_ASSISTANT_NAME: &str = "Альфонс";
-pub const DEFAULT_ACCENT_COLOR: [u8; 3] = [61, 174, 233]; // Голубой
+| Константа | Значение | Описание |
+|-----------|----------|----------|
+| `APP_NAME` | `"Альфонс"` | Название приложения |
+| `APP_VERSION` | `"0.0.5"` | Версия |
+| `DEFAULT_ASSISTANT_NAME` | `"Альфонс"` | Имя по умолчанию |
+| `DEFAULT_ACCENT_COLOR` | `[61, 174, 233]` | Голубой цвет акцента |
 
-// === Ollama AI ===
-pub const OLLAMA_URL: &str = "http://localhost:11434/api/generate";
-pub const OLLAMA_MODEL: &str = "llama3";
-pub const OLLAMA_CUSTOM_MODEL: &str = "alfons";
-pub const OLLAMA_TIMEOUT_SECS: u64 = 60;
-pub const OLLAMA_INSTALL_SCRIPT: &str = "https://ollama.com/install.sh";
+### Константы Ollama
 
-// === Yay (AUR) ===
-pub const YAY_INSTALL_DIR: &str = "/tmp/yay-install";
-pub const YAY_AUR_URL: &str = "https://aur.archlinux.org/yay.git";
+| Константа | Значение | Описание |
+|-----------|----------|----------|
+| `OLLAMA_CHAT_URL` | `http://localhost:11434/api/chat` | URL Chat API |
+| `OLLAMA_MODEL` | `"llama3"` | Базовая модель |
+| `OLLAMA_CUSTOM_MODEL` | `"alfons"` | Кастомная модель |
+| `OLLAMA_TIMEOUT_SECS` | `60` | Таймаут запросов (сек) |
+| `OLLAMA_INSTALL_SCRIPT` | `https://ollama.com/install.sh` | Скрипт установки |
 
-// === Пути ===
-pub const CONFIG_APP_NAME: &str = "alfons-assistant";
+### Константы yay
 
-// === Лимиты ===
-pub const MAX_CHAT_MESSAGES: usize = 100;
+| Константа | Значение |
+|-----------|----------|
+| `YAY_INSTALL_DIR` | `/tmp/yay-install` |
+| `YAY_AUR_URL` | `https://aur.archlinux.org/yay.git` |
 
-// === UI ===
-pub const SETTINGS_PANEL_WIDTH: f32 = 280.0;
+### Прочие константы
 
-// === Сообщения ===
-pub mod messages {
-    pub const WELCOME: &str = "Система готова. Введите команду или задайте вопрос ИИ.";
-    pub const CHAT_CLEARED: &str = "История чата очищена. Чем могу помочь?";
-    pub const PROCESSING: &str = "Обработка...";
-    pub const MODEL_CREATING: &str =
-        "Создаю кастомную модель 'alfons'... Это может занять несколько минут.";
-    pub const MODEL_CREATED: &str = "[OK] Модель 'alfons' создана! Переключаю на неё.";
-    pub const MODEL_EXISTS: &str = "Модель 'alfons' уже существует.";
-    pub const OLLAMA_INSTALLING: &str = "Устанавливаю Ollama...";
-    pub const OLLAMA_INSTALLED: &str = "[OK] Ollama успешно установлена!";
-    pub const YAY_INSTALLING: &str = "Устанавливаю yay...";
-    pub const YAY_INSTALLED: &str = "[OK] yay успешно установлен!";
-}
+| Константа | Значение | Описание |
+|-----------|----------|----------|
+| `CONFIG_APP_NAME` | `"alfons-assistant"` | Имя для confy |
+| `MAX_CHAT_MESSAGES` | `100` | Лимит сообщений |
+| `SETTINGS_PANEL_WIDTH` | `280.0` | Ширина панели настроек |
 
-// === Ошибки ===
-pub mod errors {
-    pub const OLLAMA_CONNECTION: &str = "Ошибка связи с Ollama. Убедитесь, что сервис запущен.";
-    pub const OLLAMA_PARSE: &str = "Ошибка обработки ответа от Ollama.";
-    pub const PACKAGE_NOT_FOUND: &str = "Ничего не найдено.";
-    pub const MODEL_CREATE_FAILED: &str =
-        "[X] Не удалось создать модель. Проверьте Ollama и llama3.";
-    pub const MODEL_BASE_NOT_FOUND: &str =
-        "[X] Базовая модель llama3 не найдена. Выполните: ollama pull llama3";
-    pub const YAY_DEPS_FAILED: &str = "[X] Не удалось установить зависимости для yay.";
-    pub const YAY_CLONE_FAILED: &str = "[X] Не удалось склонировать репозиторий yay.";
-    pub const YAY_BUILD_FAILED: &str = "[X] Не удалось собрать yay.";
-}
-```
+### Сообщения (`constants::messages`)
+
+| Константа | Текст |
+|-----------|-------|
+| `WELCOME` | Система готова. Введите команду или задайте вопрос ИИ. |
+| `CHAT_CLEARED` | История чата очищена. Чем могу помочь? |
+| `PROCESSING` | Обработка... |
+| `MODEL_CREATING` | Создаю кастомную модель 'alfons'... |
+| `MODEL_CREATED` | [OK] Модель 'alfons' создана! Переключаю на неё. |
+| `MODEL_EXISTS` | Модель 'alfons' уже существует. |
+| `OLLAMA_INSTALLING` | Устанавливаю Ollama... |
+| `OLLAMA_ALREADY` | Ollama уже установлена! |
+| `OLLAMA_STARTING` | Запускаю сервис Ollama... |
+| `OLLAMA_STARTED` | [OK] Сервис Ollama запущен! |
+| `YAY_INSTALLING` | Устанавливаю yay... |
+| `YAY_INSTALLED` | [OK] yay успешно установлен! |
+| `YAY_ALREADY` | yay уже установлен! |
+
+### Ошибки (`constants::errors`)
+
+| Константа | Текст |
+|-----------|-------|
+| `OLLAMA_CONNECTION` | Ошибка связи с Ollama. Убедитесь, что сервис запущен. |
+| `OLLAMA_PARSE` | Ошибка обработки ответа от Ollama. |
+| `PACKAGE_NOT_FOUND` | Ничего не найдено. |
+| `MODEL_CREATE_FAILED` | [X] Не удалось создать модель. |
+| `MODEL_BASE_NOT_FOUND` | [X] Базовая модель llama3 не найдена. |
+| `OLLAMA_INSTALL_FAILED` | [X] Не удалось установить Ollama. |
+| `OLLAMA_START_FAILED` | [X] Не удалось запустить сервис Ollama. |
+| `YAY_DEPS_FAILED` | [X] Не удалось установить зависимости для yay. |
+| `YAY_CLONE_FAILED` | [X] Не удалось склонировать репозиторий yay. |
+| `YAY_BUILD_FAILED` | [X] Не удалось собрать yay. |
 
 ---
 
@@ -1614,39 +1282,81 @@ pub mod errors {
 | Модуль | Функция | Описание |
 |--------|---------|----------|
 | **assistant_app** | `new()` | Создание приложения |
-| | `process_input()` | Обработка ввода |
-| | `send_to_ai()` | Отправка в AI |
+| | `check_ollama_periodic()` | Периодическая проверка Ollama |
+| | `process_input()` | Обработка ввода пользователя |
+| | `send_to_ai()` | Отправка в AI с историей |
 | | `check_tasks()` | Проверка фоновых задач |
 | | `process_ai_commands()` | Обработка `[CMD:...]` |
 | | `clear_chat()` | Очистка чата |
-| **chat** | `DialogState::show_confirm()` | Диалог подтверждения |
+| **chat** | `DialogState::new()` | Создание диалога |
+| | `DialogState::show_search()` | Диалог поиска пакетов |
+| | `DialogState::show_confirm()` | Диалог подтверждения |
+| | `DialogState::hide()` | Скрытие диалога |
 | | `ChatHistory::add_message()` | Добавить сообщение |
+| | `ChatHistory::clear()` | Очистка истории |
+| | `ChatHistory::messages()` | Итератор по сообщениям |
+| | `ChatHistory::as_pairs()` | История как пары (sender, text) |
+| | `TaskManager::new()` | Создание менеджера задач |
 | | `TaskManager::execute()` | Запуск фоновой задачи |
+| | `TaskManager::is_busy()` | Проверка занятости |
+| | `InputHistory::push()` | Добавить в историю |
 | | `InputHistory::up/down()` | Навигация по истории |
+| | `InputHistory::reset()` | Сброс позиции |
 | **config** | `Config::load()` | Загрузка настроек |
 | | `Config::save()` | Сохранение настроек |
-| **ai** | `LocalAi::generate()` | Генерация ответа AI |
-| | `check_ollama_status()` | Проверка Ollama |
-| | `create_custom_model()` | Создание модели |
+| | `Config::accent_color_egui()` | Конвертация цвета для egui |
+| **ai** | `LocalAi::new()` | Создание AI клиента |
+| | `LocalAi::set_model()` | Установка модели |
+| | `LocalAi::get_model()` | Получение модели |
+| | `LocalAi::generate()` | Генерация ответа с историей |
+| | `check_ollama_status()` | Проверка сервиса Ollama |
+| | `is_custom_model_exists()` | Проверка модели alfons |
+| | `is_base_model_exists()` | Проверка модели llama3 |
+| | `create_custom_model()` | Создание модели alfons |
+| | `is_ollama_installed()` | Проверка установки Ollama |
 | | `install_ollama()` | Установка Ollama |
+| | `start_ollama_service()` | Запуск сервиса Ollama |
+| | `ToolRegistry::new()` | Создание реестра инструментов |
+| | `ToolRegistry::register()` | Регистрация инструмента |
 | | `ToolRegistry::execute()` | Выполнение инструмента |
-| **commands** | `process_command()` | Главный обработчик |
+| | `ToolRegistry::generate_system_prompt()` | Генерация промпта |
+| **commands** | `process_command()` | Главный обработчик команд |
 | | `process_basic_command()` | Базовые команды |
 | | `process_package_command()` | Пакетный менеджер |
 | | `process_system_command()` | Системные команды |
 | | `process_guide_command()` | Гайды |
 | | `search_packages()` | Поиск пакетов |
 | | `install_package()` | Установка пакета |
+| | `remove_package()` | Удаление пакета |
+| | `update_system()` | Обновление системы |
+| | `is_yay_installed()` | Проверка yay |
 | | `install_yay()` | Установка yay |
-| **guides** | `GuideRegistry::get()` | Получить гайд |
+| | `execute_shutdown()` | Выключение ПК |
+| | `execute_reboot()` | Перезагрузка ПК |
+| **guides** | `GuideRegistry::new()` | Создание с гайдами |
+| | `GuideRegistry::register()` | Регистрация гайда |
+| | `GuideRegistry::get()` | Получить гайд по ID |
 | | `GuideRegistry::search()` | Поиск гайдов |
-| | `Guide::format()` | Форматирование |
+| | `GuideRegistry::format_list()` | Список гайдов |
+| | `Guide::format()` | Форматирование гайда |
 | **ui** | `render()` | Главный рендеринг |
+| | `handle_hotkeys()` | Горячие клавиши |
+| | `render_header()` | Шапка приложения |
+| | `render_settings()` | Панель настроек |
+| | `render_chat()` | Область чата |
+| | `render_input()` | Поле ввода |
 | | `render_message()` | Пузырь сообщения |
 | | `dialogs::render()` | Модальный диалог |
 | **desktop** | `DesktopEnvironment::detect()` | Определение DE |
 | | `terminal_priority()` | Приоритет терминалов |
+| | `preferred_terminal()` | Предпочтительный терминал |
+| | `name()` | Название DE |
 | | `DeStyles::for_de()` | Стили для DE |
+| | `run_in_terminal()` | Запуск команды в терминале |
 | **installer** | `install()` | Установка в систему |
 | | `uninstall()` | Удаление из системы |
 | | `is_installed()` | Проверка установки |
+| | `get_installed_path()` | Путь к бинарнику |
+| | `is_local_bin_in_path()` | Проверка PATH |
+| | `get_path_export_command()` | Команда для PATH |
+| **command_log** | `log_command()` | Логирование команд |
