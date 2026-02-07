@@ -1,4 +1,5 @@
 use chrono::Local;
+use crate::app::constants::APP_VERSION;
 
 /// Специальные команды для перехвата в UI
 pub const CMD_CLEAR_CHAT: &str = "COMMAND_ACTION_CLEAR";
@@ -11,6 +12,11 @@ pub fn process_basic_command(cmd: &str, assistant_name: &str) -> Option<String> 
             "Привет! Я {}, твой помощник для Arch Linux.",
             assistant_name
         )),
+
+        // Версия
+        "версия" => {
+            Some(format!("Нынешняя версия проекта: {}",APP_VERSION))
+        }
 
         // Очистка чата — возвращаем маркер для перехвата в UI
         "очистить" | "очистить чат" | "clear" => {

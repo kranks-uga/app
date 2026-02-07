@@ -5,7 +5,7 @@
 
 // === Приложение ===
 pub const APP_NAME: &str = "Альфонс";
-pub const APP_VERSION: &str = "0.0.5";
+pub const APP_VERSION: &str = "0.1.0";
 pub const DEFAULT_ASSISTANT_NAME: &str = "Альфонс";
 pub const DEFAULT_ACCENT_COLOR: [u8; 3] = [61, 174, 233]; // Голубой
 
@@ -28,6 +28,11 @@ pub const MAX_CHAT_MESSAGES: usize = 100;
 
 // === UI ===
 pub const SETTINGS_PANEL_WIDTH: f32 = 280.0;
+pub const SESSIONS_PANEL_WIDTH: f32 = 220.0;
+
+// === Сессии чата ===
+pub const CHATS_DIR: &str = "chats";
+pub const MAX_SESSION_TITLE_LEN: usize = 30;
 
 // === Сообщения ===
 pub mod messages {

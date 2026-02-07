@@ -4,7 +4,7 @@ pub mod dialogs;
 pub mod widgets;
 
 use super::chat::BackgroundTask;
-use super::constants::{messages, APP_NAME, APP_VERSION, SETTINGS_PANEL_WIDTH};
+use super::constants::{messages, APP_NAME, APP_VERSION, SESSIONS_PANEL_WIDTH, SETTINGS_PANEL_WIDTH};
 use super::AssistantApp;
 use eframe::egui;
 use std::sync::atomic::Ordering;
@@ -20,6 +20,10 @@ pub fn render(ctx: &egui::Context, app: &mut AssistantApp) {
 
     if app.show_settings {
         render_settings(ctx, app, accent);
+    }
+
+    if app.show_sessions {
+        render_sessions(ctx, app, accent);
     }
 
     render_input(ctx, app, accent);
@@ -55,6 +59,17 @@ fn render_header(ctx: &egui::Context, app: &mut AssistantApp, accent: egui::Colo
         ui.add_space(10.0);
         ui.horizontal(|ui| {
             ui.add_space(10.0);
+
+            // Кнопка-гамбургер для toggle боковой панели сессий
+            if ui
+                .button(egui::RichText::new("[#]").size(16.0))
+                .on_hover_text("Список чатов")
+                .clicked()
+            {
+                app.show_sessions = !app.show_sessions;
+            }
+
+            ui.add_space(5.0);
 
             // Название
             ui.heading(
@@ -344,7 +359,7 @@ fn render_settings(ctx: &egui::Context, app: &mut AssistantApp, accent: egui::Co
                     ui.add_space(5.0);
                     ui.label(egui::RichText::new("Ctrl+L — очистить чат").weak().small());
                     ui.label(egui::RichText::new("Esc — закрыть панель").weak().small());
-                    ui.label(egui::RichText::new("↑/↓ — история команд").weak().small());
+                    ui.label(egui::RichText::new("Up/Down -- история команд").weak().small());
 
                     // О программе
                     ui.add_space(20.0);
@@ -451,6 +466,134 @@ fn render_settings(ctx: &egui::Context, app: &mut AssistantApp, accent: egui::Co
                     ui.add_space(20.0);
                 }); // конец ScrollArea
         });
+}
+
+/// Боковая панель сессий чатов
+fn render_sessions(ctx: &egui::Context, app: &mut AssistantApp, accent: egui::Color32) {
+    egui::SidePanel::left("sessions")
+        .default_width(SESSIONS_PANEL_WIDTH)
+        .show(ctx, |ui| {
+            ui.add_space(10.0);
+
+            // Кнопка «+ Новый чат»
+            let new_btn = egui::Button::new(
+                egui::RichText::new("+ Новый чат").strong().color(egui::Color32::WHITE),
+            )
+            .fill(accent)
+            .min_size(egui::vec2(ui.available_width(), 35.0));
+
+            if ui.add(new_btn).clicked() {
+                app.new_chat();
+            }
+
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(5.0);
+
+            // Список чатов
+            egui::ScrollArea::vertical()
+                .auto_shrink([false; 2])
+                .show(ui, |ui| {
+                    // Собираем данные для отрисовки, чтобы избежать borrow-конфликтов
+                    let current_id = app.session_manager.current_session_id.clone();
+                    let sessions: Vec<_> = app
+                        .session_manager
+                        .sessions
+                        .iter()
+                        .map(|s| (s.id.clone(), s.title.clone(), s.created_at))
+                        .collect();
+
+                    let mut action: Option<SessionAction> = None;
+
+                    for (id, title, created_at) in &sessions {
+                        let is_current = current_id.as_deref() == Some(id.as_str());
+
+                        let bg = if is_current {
+                            accent.gamma_multiply(0.2)
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
+
+                        let frame = egui::Frame::none()
+                            .fill(bg)
+                            .rounding(6.0)
+                            .inner_margin(egui::Margin::symmetric(8.0, 6.0));
+
+                        frame.show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.horizontal(|ui| {
+                                // Название и дата — кликабельная область для переключения
+                                let title_color = if is_current {
+                                    accent
+                                } else {
+                                    egui::Color32::WHITE
+                                };
+
+                                let text_resp = ui
+                                    .vertical(|ui| {
+                                        ui.label(
+                                            egui::RichText::new(title)
+                                                .color(title_color)
+                                                .size(13.0)
+                                                .strong(),
+                                        );
+                                        ui.label(
+                                            egui::RichText::new(
+                                                created_at
+                                                    .format("%d.%m.%Y %H:%M")
+                                                    .to_string(),
+                                            )
+                                            .color(egui::Color32::GRAY)
+                                            .size(10.0),
+                                        );
+                                    })
+                                    .response
+                                    .interact(egui::Sense::click());
+
+                                if text_resp.clicked() && action.is_none() {
+                                    action = Some(SessionAction::Switch(id.clone()));
+                                }
+
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui
+                                            .add(
+                                                egui::Button::new(
+                                                    egui::RichText::new("x")
+                                                        .size(12.0)
+                                                        .color(egui::Color32::GRAY),
+                                                )
+                                                .frame(false),
+                                            )
+                                            .on_hover_text("Удалить чат")
+                                            .clicked()
+                                        {
+                                            action = Some(SessionAction::Delete(id.clone()));
+                                        }
+                                    },
+                                );
+                            });
+                        });
+
+                        ui.add_space(2.0);
+                    }
+
+                    // Выполняем действие после отрисовки
+                    if let Some(action) = action {
+                        match action {
+                            SessionAction::Switch(id) => app.switch_chat(&id),
+                            SessionAction::Delete(id) => app.delete_chat(&id),
+                        }
+                    }
+                });
+        });
+}
+
+/// Действия из панели сессий
+enum SessionAction {
+    Switch(String),
+    Delete(String),
 }
 
 /// Область чата

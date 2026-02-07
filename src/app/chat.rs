@@ -1,12 +1,16 @@
 //! Модуль чата и фоновых задач
 
-use super::constants::MAX_CHAT_MESSAGES;
+use super::constants::{CHATS_DIR, CONFIG_APP_NAME, MAX_CHAT_MESSAGES, MAX_SESSION_TITLE_LEN};
 use chrono::{DateTime, Local};
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread;
+use uuid::Uuid;
 
 // ============================================================================
 // Диалоги
@@ -89,7 +93,7 @@ pub enum BackgroundTask {
 // ============================================================================
 
 /// Сообщение в чате
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub sender: String,
     pub text: String,
@@ -141,11 +145,177 @@ impl ChatHistory {
             .map(|m| (m.sender.clone(), m.text.clone()))
             .collect()
     }
+
+    /// Возвращает все сообщения как Vec для сериализации
+    pub fn to_vec(&self) -> Vec<ChatMessage> {
+        self.messages.iter().cloned().collect()
+    }
+
+    /// Загружает сообщения из вектора
+    pub fn load_from(&mut self, messages: Vec<ChatMessage>) {
+        self.messages.clear();
+        for msg in messages {
+            self.messages.push_back(msg);
+        }
+        // Обрезаем если превышен лимит
+        while self.messages.len() > self.max_messages {
+            self.messages.pop_front();
+        }
+    }
+
 }
 
 impl Default for ChatHistory {
     fn default() -> Self {
         Self::new(MAX_CHAT_MESSAGES)
+    }
+}
+
+// ============================================================================
+// Сессии чатов
+// ============================================================================
+
+/// Полная сессия чата (для сохранения на диск)
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ChatSession {
+    pub id: String,
+    pub title: String,
+    pub created_at: DateTime<Local>,
+    pub messages: Vec<ChatMessage>,
+}
+
+/// Метаданные сессии (для списка в sidebar, без сообщений)
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ChatSessionMeta {
+    pub id: String,
+    pub title: String,
+    pub created_at: DateTime<Local>,
+}
+
+/// Менеджер сессий чатов
+pub struct ChatSessionManager {
+    pub sessions: Vec<ChatSessionMeta>,
+    pub current_session_id: Option<String>,
+    chats_dir: PathBuf,
+}
+
+impl ChatSessionManager {
+    /// Создаёт менеджер, инициализирует директорию, загружает список метаданных
+    pub fn new() -> Self {
+        let chats_dir = dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(CONFIG_APP_NAME)
+            .join(CHATS_DIR);
+
+        // Создаём директорию если не существует
+        let _ = fs::create_dir_all(&chats_dir);
+
+        let mut manager = Self {
+            sessions: Vec::new(),
+            current_session_id: None,
+            chats_dir,
+        };
+        manager.load_meta_list();
+        manager
+    }
+
+    /// Создаёт новую сессию, возвращает её id
+    pub fn create_session(&mut self) -> String {
+        let id = Uuid::new_v4().to_string();
+        let meta = ChatSessionMeta {
+            id: id.clone(),
+            title: "Новый чат".to_string(),
+            created_at: Local::now(),
+        };
+
+        // Сохраняем пустую сессию на диск
+        let session = ChatSession {
+            id: id.clone(),
+            title: meta.title.clone(),
+            created_at: meta.created_at,
+            messages: Vec::new(),
+        };
+        self.write_session(&session);
+
+        self.sessions.insert(0, meta);
+        self.current_session_id = Some(id.clone());
+        id
+    }
+
+    /// Сохраняет текущий чат на диск
+    pub fn save_session(&self, id: &str, chat: &ChatHistory) {
+        if let Some(meta) = self.sessions.iter().find(|s| s.id == id) {
+            let session = ChatSession {
+                id: id.to_string(),
+                title: meta.title.clone(),
+                created_at: meta.created_at,
+                messages: chat.to_vec(),
+            };
+            self.write_session(&session);
+        }
+    }
+
+    /// Загружает чат с диска в ChatHistory
+    pub fn load_session(&self, id: &str) -> Option<ChatHistory> {
+        let path = self.chats_dir.join(format!("{}.json", id));
+        let data = fs::read_to_string(&path).ok()?;
+        let session: ChatSession = serde_json::from_str(&data).ok()?;
+
+        let mut history = ChatHistory::default();
+        history.load_from(session.messages);
+        Some(history)
+    }
+
+    /// Удаляет сессию (файл и метаданные)
+    pub fn delete_session(&mut self, id: &str) {
+        let path = self.chats_dir.join(format!("{}.json", id));
+        let _ = fs::remove_file(&path);
+        self.sessions.retain(|s| s.id != id);
+    }
+
+    /// Обновляет заголовок сессии
+    pub fn update_title(&mut self, id: &str, title: &str) {
+        let truncated: String = title.chars().take(MAX_SESSION_TITLE_LEN).collect();
+        if let Some(meta) = self.sessions.iter_mut().find(|s| s.id == id) {
+            meta.title = truncated;
+        }
+    }
+
+    /// Сканирует директорию и загружает метаданные всех сессий
+    fn load_meta_list(&mut self) {
+        self.sessions.clear();
+
+        let entries = match fs::read_dir(&self.chats_dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().map(|e| e == "json").unwrap_or(false) {
+                if let Ok(data) = fs::read_to_string(&path) {
+                    if let Ok(session) = serde_json::from_str::<ChatSession>(&data) {
+                        self.sessions.push(ChatSessionMeta {
+                            id: session.id,
+                            title: session.title,
+                            created_at: session.created_at,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Сортируем по дате создания (новые сверху)
+        self.sessions
+            .sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    }
+
+    /// Записывает сессию на диск
+    fn write_session(&self, session: &ChatSession) {
+        let path = self.chats_dir.join(format!("{}.json", session.id));
+        if let Ok(json) = serde_json::to_string_pretty(session) {
+            let _ = fs::write(&path, json);
+        }
     }
 }
 

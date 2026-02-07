@@ -18,9 +18,9 @@ pub mod command_log; // Логирование команд
 pub mod commands; // Обработка команд
 pub mod config; // Настройки пользователя
 pub mod constants; // Константы и строки
-pub mod desktop;
+pub mod desktop; // Определение DE и стили
 pub mod guides; // Обучающие гайды
 pub mod installer; // Установка в систему
-pub mod ui; // Графический интерфейс // Определение DE и стили
+pub mod ui; // Графический интерфейс
 
 pub use assistant_app::AssistantApp;

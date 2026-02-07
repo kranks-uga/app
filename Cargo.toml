@@ -1,13 +1,13 @@
 [package]
 name = "alfons-assistant"
-version = "0.0.5"
+version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0"
 
 [dependencies]
 eframe = "0.26"
 egui = "0.26"
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
 confy = "0.6"
 serde = { version = "1.0", features = ["derive"] }
 reqwest = { version = "0.12", features = ["json"] }
@@ -16,3 +16,4 @@ serde_json = "1.0"
 regex = "1.10"
 dirs = "5.0"
 rfd = "0.15"
+uuid = { version = "1", features = ["v4"] }

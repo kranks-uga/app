@@ -2,8 +2,33 @@
 
 use crate::app::chat::{BackgroundTask, DialogState, TaskManager};
 use crate::app::constants::{errors, messages, YAY_AUR_URL, YAY_INSTALL_DIR};
-use crate::app::desktop::DesktopEnvironment;
+use crate::app::desktop::run_in_terminal;
 use std::process::Command;
+
+/// Маппинг русских названий приложений на реальные имена пакетов
+fn resolve_package_alias(input: &str) -> &str {
+    match input {
+        "стим" | "steam" => "steam",
+        "дискорд" | "discord" => "discord",
+        "телеграм" | "телеграмм" | "telegram" => "telegram-desktop",
+        "вс код" | "vs code" | "vscode" => "visual-studio-code-bin",
+        "фаерфокс" | "firefox" => "firefox",
+        "хром" | "хромиум" | "chromium" => "chromium",
+        "влц" | "vlc" => "vlc",
+        "гимп" | "gimp" => "gimp",
+        "обс" | "obs" => "obs-studio",
+        "лутрис" | "lutris" => "lutris",
+        other => other,
+    }
+}
+
+/// Проверяет, что имя пакета содержит только допустимые символы pacman/AUR
+fn is_valid_package_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '@' | '.' | '_' | '+' | '-'))
+}
 
 /// Обработка команд пакетного менеджера
 pub fn process_package_command(
@@ -23,6 +48,7 @@ pub fn process_package_command(
         if package.is_empty() {
             return Some("Укажите пакет. Пример: установить firefox".into());
         }
+        let package = resolve_package_alias(package);
         dialog.show_confirm(
             "Установка пакета",
             &format!("Установить '{}' через yay?", package),
@@ -37,6 +63,7 @@ pub fn process_package_command(
         if package.is_empty() {
             return Some("Укажите пакет для удаления.".into());
         }
+        let package = resolve_package_alias(package);
         dialog.show_confirm(
             "Удаление пакета",
             &format!("Удалить '{}' из системы?", package),
@@ -77,6 +104,9 @@ pub fn process_package_command(
 
 /// Поиск пакетов через yay
 pub fn search_packages(query: &str) -> String {
+    if !is_valid_package_name(query) {
+        return "Недопустимые символы в запросе поиска.".into();
+    }
     match Command::new("yay").args(["-Ss", query]).output() {
         Ok(out) => {
             let result = String::from_utf8_lossy(&out.stdout);
@@ -90,9 +120,51 @@ pub fn search_packages(query: &str) -> String {
     }
 }
 
+/// Проверяет, требует ли пакет включённого репозитория multilib
+fn needs_multilib(package: &str) -> bool {
+    matches!(package, "steam" | "lib32-mesa" | "lib32-vulkan-icd-loader")
+}
+
+/// Проверяет, включён ли репозиторий [multilib] в pacman.conf
+fn is_multilib_enabled() -> bool {
+    std::fs::read_to_string("/etc/pacman.conf")
+        .map(|content| content.lines().any(|line| line.trim() == "[multilib]"))
+        .unwrap_or(false)
+}
+
+/// Включает репозиторий [multilib] через pkexec и обновляет базы пакетов
+fn enable_multilib() -> Result<(), String> {
+    let sed = Command::new("pkexec")
+        .args([
+            "sed",
+            "-i",
+            "/^#\\[multilib\\]/,/^#Include/ s/^#//",
+            "/etc/pacman.conf",
+        ])
+        .status();
+    if sed.is_err() || !sed.unwrap().success() {
+        return Err("Не удалось включить multilib.".into());
+    }
+    let sync = Command::new("pkexec")
+        .args(["pacman", "-Sy"])
+        .status();
+    if sync.is_err() || !sync.unwrap().success() {
+        return Err("Не удалось обновить базы пакетов.".into());
+    }
+    Ok(())
+}
+
 /// Установка пакета
 /// Запускаем в терминале для интерактивного sudo
 pub fn install_package(package: &str) -> String {
+    if !is_valid_package_name(package) {
+        return "Недопустимое имя пакета.".into();
+    }
+    if needs_multilib(package) && !is_multilib_enabled() {
+        if let Err(e) = enable_multilib() {
+            return e;
+        }
+    }
     run_in_terminal(
         &format!("yay -S {}", package),
         &format!("Установка {}", package),
@@ -102,89 +174,12 @@ pub fn install_package(package: &str) -> String {
 /// Удаление пакета
 /// Запускаем в терминале для интерактивного sudo
 pub fn remove_package(package: &str) -> String {
+    if !is_valid_package_name(package) {
+        return "Недопустимое имя пакета.".into();
+    }
     run_in_terminal(
         &format!("yay -R {}", package),
         &format!("Удаление {}", package),
-    )
-}
-
-/// Возвращает аргументы для запуска команды в конкретном терминале
-fn get_terminal_args(term: &str, cmd: &str) -> Option<Vec<String>> {
-    let args = match term {
-        "kitty" => vec![
-            "--hold".to_string(),
-            "-e".to_string(),
-            "sh".to_string(),
-            "-c".to_string(),
-            cmd.to_string(),
-        ],
-        "alacritty" => vec![
-            "-e".to_string(),
-            "sh".to_string(),
-            "-c".to_string(),
-            format!("{}; echo 'Нажмите Enter...'; read", cmd),
-        ],
-        "gnome-terminal" | "kgx" => vec![
-            "--".to_string(),
-            "sh".to_string(),
-            "-c".to_string(),
-            format!("{}; echo 'Нажмите Enter...'; read", cmd),
-        ],
-        "konsole" => vec![
-            "-e".to_string(),
-            "sh".to_string(),
-            "-c".to_string(),
-            format!("{}; echo 'Нажмите Enter...'; read", cmd),
-        ],
-        "xfce4-terminal" => vec![
-            "-e".to_string(),
-            format!("sh -c '{}; echo Нажмите Enter...; read'", cmd),
-        ],
-        "xterm" => vec![
-            "-hold".to_string(),
-            "-e".to_string(),
-            "sh".to_string(),
-            "-c".to_string(),
-            cmd.to_string(),
-        ],
-        _ => return None,
-    };
-    Some(args)
-}
-
-/// Запускает команду в терминале (с учётом текущего DE)
-fn run_in_terminal(cmd: &str, action: &str) -> String {
-    let de = DesktopEnvironment::detect();
-    let terminals = de.terminal_priority();
-
-    for term in terminals {
-        // Проверяем, установлен ли терминал
-        if !Command::new("which")
-            .arg(term)
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-        {
-            continue;
-        }
-
-        // Получаем аргументы для терминала
-        let args = match get_terminal_args(term, cmd) {
-            Some(a) => a,
-            None => continue,
-        };
-
-        // Запускаем
-        match Command::new(term).args(&args).spawn() {
-            Ok(_) => return format!("[OK] {} запущено в {}", action, term),
-            Err(_) => continue,
-        }
-    }
-
-    format!(
-        "[X] Не найден терминал для {}. Установите {} или другой терминал.",
-        de.name(),
-        de.preferred_terminal()
     )
 }
 
@@ -226,7 +221,7 @@ pub fn install_yay() -> String {
     }
 
     // 2. Клонирование репозитория
-    let _ = Command::new("rm").args(["-rf", YAY_INSTALL_DIR]).status();
+    let _ = std::fs::remove_dir_all(YAY_INSTALL_DIR);
 
     let clone = Command::new("git")
         .args(["clone", YAY_AUR_URL, YAY_INSTALL_DIR])
@@ -245,7 +240,7 @@ pub fn install_yay() -> String {
         .status();
 
     // Очистка
-    let _ = Command::new("rm").args(["-rf", YAY_INSTALL_DIR]).status();
+    let _ = std::fs::remove_dir_all(YAY_INSTALL_DIR);
 
     match build {
         Ok(s) if s.success() && is_yay_installed() => messages::YAY_INSTALLED.into(),

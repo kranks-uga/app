@@ -1,7 +1,7 @@
 //! Главная структура приложения
 
 use super::ai::local_provider::LocalAi;
-use super::chat::{ChatHistory, DialogState, InputHistory, TaskManager};
+use super::chat::{ChatHistory, ChatSessionManager, DialogState, InputHistory, TaskManager};
 use super::commands::{self, base::CMD_CLEAR_CHAT};
 use super::config::Config;
 use super::constants::messages;
@@ -30,6 +30,10 @@ pub struct AssistantApp {
     pub chat: ChatHistory,
     pub guides: GuideRegistry,
     pub ai: Arc<LocalAi>,
+
+    // Сессии чатов
+    pub session_manager: ChatSessionManager,
+    pub show_sessions: bool,
 
     // UI состояние
     pub input_text: String,
@@ -61,8 +65,22 @@ impl AssistantApp {
         let desktop_env = DesktopEnvironment::detect();
         let de_styles = DeStyles::for_de(desktop_env);
 
+        // Инициализируем менеджер сессий
+        let mut session_manager = ChatSessionManager::new();
         let mut chat = ChatHistory::default();
-        chat.add_message(&config.assistant_name, messages::WELCOME);
+
+        // Загружаем последнюю сессию или создаём новую
+        if let Some(first) = session_manager.sessions.first() {
+            let id = first.id.clone();
+            if let Some(loaded) = session_manager.load_session(&id) {
+                chat = loaded;
+                session_manager.current_session_id = Some(id);
+            }
+        }
+        if session_manager.current_session_id.is_none() {
+            session_manager.create_session();
+            chat.add_message(&config.assistant_name, messages::WELCOME);
+        }
 
         let ai = Arc::new(LocalAi::new());
         ai.set_model(&config.ollama_model);
@@ -107,6 +125,8 @@ impl AssistantApp {
             chat,
             guides: GuideRegistry::new(),
             ai,
+            session_manager,
+            show_sessions: false,
             input_text: String::new(),
             show_settings: false,
             dialog: DialogState::new(),
@@ -147,6 +167,16 @@ impl AssistantApp {
         self.input_history.push(&input);
         self.chat.add_message("Вы", &input);
 
+        // Обновляем заголовок сессии при первом сообщении пользователя
+        if let Some(ref id) = self.session_manager.current_session_id {
+            if let Some(meta) = self.session_manager.sessions.iter().find(|s| &s.id == id) {
+                if meta.title == "Новый чат" {
+                    let id = id.clone();
+                    self.session_manager.update_title(&id, &input);
+                }
+            }
+        }
+
         // Пробуем обработать как команду
         let response = commands::process_command(
             &input,
@@ -169,6 +199,7 @@ impl AssistantApp {
         }
 
         self.input_text.clear();
+        self.autosave();
     }
 
     /// Отправка запроса в AI
@@ -190,7 +221,9 @@ impl AssistantApp {
 
     /// Проверка завершённых фоновых задач
     pub fn check_tasks(&mut self) {
+        let mut had_messages = false;
         while let Ok(result) = self.task_receiver.try_recv() {
+            had_messages = true;
             // AI ответы содержат имя ассистента
             if result.starts_with(&self.config.assistant_name) {
                 if let Some((name, text)) = result.split_once(": ") {
@@ -203,6 +236,9 @@ impl AssistantApp {
             } else {
                 self.chat.add_message("Система", &result);
             }
+        }
+        if had_messages {
+            self.autosave();
         }
     }
 
@@ -253,6 +289,68 @@ impl AssistantApp {
         self.chat.clear();
         self.chat
             .add_message(&self.config.assistant_name, messages::CHAT_CLEARED);
+        self.autosave();
+    }
+
+    /// Создать новый чат
+    pub fn new_chat(&mut self) {
+        // Сохраняем текущий
+        self.autosave();
+        // Создаём новую сессию
+        self.session_manager.create_session();
+        self.chat = ChatHistory::default();
+        self.chat
+            .add_message(&self.config.assistant_name, messages::WELCOME);
+    }
+
+    /// Переключиться на другой чат
+    pub fn switch_chat(&mut self, id: &str) {
+        if self.session_manager.current_session_id.as_deref() == Some(id) {
+            return;
+        }
+        // Сохраняем текущий
+        self.autosave();
+        // Загружаем новый
+        if let Some(loaded) = self.session_manager.load_session(id) {
+            self.chat = loaded;
+            self.session_manager.current_session_id = Some(id.to_string());
+        }
+    }
+
+    /// Удалить чат
+    pub fn delete_chat(&mut self, id: &str) {
+        let is_current = self.session_manager.current_session_id.as_deref() == Some(id);
+        self.session_manager.delete_session(id);
+
+        if is_current {
+            // Переключаемся на первый оставшийся или создаём новый
+            if let Some(first) = self.session_manager.sessions.first() {
+                let first_id = first.id.clone();
+                if let Some(loaded) = self.session_manager.load_session(&first_id) {
+                    self.chat = loaded;
+                    self.session_manager.current_session_id = Some(first_id);
+                } else {
+                    self.start_fresh_session();
+                }
+            } else {
+                self.start_fresh_session();
+            }
+        }
+    }
+
+    /// Автосохранение текущей сессии
+    fn autosave(&self) {
+        if let Some(ref id) = self.session_manager.current_session_id {
+            self.session_manager.save_session(id, &self.chat);
+        }
+    }
+
+    /// Создаёт новую сессию с приветственным сообщением
+    fn start_fresh_session(&mut self) {
+        self.session_manager.create_session();
+        self.chat = ChatHistory::default();
+        self.chat
+            .add_message(&self.config.assistant_name, messages::WELCOME);
     }
 }
 
