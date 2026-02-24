@@ -103,17 +103,20 @@ pub fn process_package_command(
 // ============================================================================
 
 /// Поиск пакетов через yay
+/// Возвращает "__PKG_SEARCH__:<query>\n<raw output>" для отображения в диалоге
 pub fn search_packages(query: &str) -> String {
     if !is_valid_package_name(query) {
         return "Недопустимые символы в запросе поиска.".into();
     }
-    match Command::new("yay").args(["-Ss", query]).output() {
+    match Command::new("yay").args(["-Ss", "--color", "never", query]).output() {
         Ok(out) => {
-            let result = String::from_utf8_lossy(&out.stdout);
-            if result.trim().is_empty() {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let combined = if stdout.trim().is_empty() { stderr } else { stdout };
+            if combined.trim().is_empty() {
                 errors::PACKAGE_NOT_FOUND.into()
             } else {
-                result.into()
+                format!("__PKG_SEARCH__:{}\n{}", query, combined)
             }
         }
         Err(e) => format!("Ошибка yay: {}", e),

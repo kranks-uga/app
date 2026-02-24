@@ -1,7 +1,8 @@
 //! Главная структура приложения
 
 use super::ai::local_provider::LocalAi;
-use super::chat::{ChatHistory, ChatSessionManager, DialogState, InputHistory, TaskManager};
+use super::game::GameHub;
+use super::chat::{ChatHistory, ChatSessionManager, DialogState, InputHistory, PackageInfo, TaskManager};
 use super::commands::{self, base::CMD_CLEAR_CHAT};
 use super::config::Config;
 use super::constants::messages;
@@ -46,6 +47,10 @@ pub struct AssistantApp {
     pub custom_model_exists: Arc<AtomicBool>,
     pub app_installed: Arc<AtomicBool>,
     last_ollama_check: Instant,
+
+    // Игры
+    pub games: GameHub,
+    pub show_game: bool,
 
     // Окружение рабочего стола
     pub desktop_env: DesktopEnvironment,
@@ -137,6 +142,8 @@ impl AssistantApp {
             custom_model_exists,
             app_installed,
             last_ollama_check: Instant::now(),
+            games: GameHub::new(),
+            show_game: false,
             desktop_env,
             de_styles,
             tasks,
@@ -224,10 +231,19 @@ impl AssistantApp {
         let mut had_messages = false;
         while let Ok(result) = self.task_receiver.try_recv() {
             had_messages = true;
-            // AI ответы содержат имя ассистента
-            if result.starts_with(&self.config.assistant_name) {
+            if result.starts_with("__PKG_SEARCH__:") {
+                // Результат поиска пакетов — показываем в диалоге
+                let rest = &result["__PKG_SEARCH__:".len()..];
+                if let Some((query, raw)) = rest.split_once('\n') {
+                    let packages = parse_yay_output(raw);
+                    if packages.is_empty() {
+                        self.chat.add_message("Система", "Ничего не найдено.");
+                    } else {
+                        self.dialog.show_package_results(query, packages);
+                    }
+                }
+            } else if result.starts_with(&self.config.assistant_name) {
                 if let Some((name, text)) = result.split_once(": ") {
-                    // Обрабатываем команды от AI
                     let processed_text = self.process_ai_commands(text);
                     self.chat.add_message(name, &processed_text);
                 } else {
@@ -352,6 +368,66 @@ impl AssistantApp {
         self.chat
             .add_message(&self.config.assistant_name, messages::WELCOME);
     }
+}
+
+/// Удаляет ANSI escape-коды из строки
+fn strip_ansi(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // Пропускаем ESC [ ... буква
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for nc in chars.by_ref() {
+                    if nc.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
+/// Парсит вывод `yay -Ss` в список пакетов (макс. 25 результатов)
+fn parse_yay_output(output: &str) -> Vec<PackageInfo> {
+    let mut packages = Vec::new();
+    let lines: Vec<&str> = output.lines().collect();
+    let mut i = 0;
+    while i < lines.len() && packages.len() < 25 {
+        // Убираем ANSI-коды и ведущие пробелы
+        let line = strip_ansi(lines[i].trim());
+
+        // Строка пакета: "repo/name version [info]"
+        // Исключаем строки-заголовки вроде ":: Searching AUR..."
+        if line.contains('/') && !line.starts_with("::") && !line.starts_with('#') {
+            let desc = lines
+                .get(i + 1)
+                .map(|l| strip_ansi(l.trim()))
+                .unwrap_or_default();
+
+            if let Some((repo_name, rest)) = line.split_once(' ') {
+                if let Some((repo, name)) = repo_name.split_once('/') {
+                    let version = rest.split_whitespace().next().unwrap_or("").to_string();
+                    if !repo.is_empty() && !name.is_empty() && !version.is_empty() {
+                        packages.push(PackageInfo {
+                            repo: repo.to_string(),
+                            name: name.to_string(),
+                            version,
+                            description: desc,
+                        });
+                        i += 2;
+                        continue;
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    packages
 }
 
 impl eframe::App for AssistantApp {

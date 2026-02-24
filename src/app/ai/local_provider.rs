@@ -1,6 +1,7 @@
 //! Локальный AI через Ollama
 
 use crate::app::desktop::run_in_terminal;
+use super::rag::ArchWikiRag;
 use super::tools::ToolRegistry;
 use crate::app::constants::{
     errors, messages, OLLAMA_CHAT_URL, OLLAMA_CUSTOM_MODEL, OLLAMA_INSTALL_SCRIPT, OLLAMA_MODEL,
@@ -48,6 +49,7 @@ pub struct LocalAi {
     client: Client,
     model: RwLock<String>,
     tools: ToolRegistry,
+    rag: ArchWikiRag,
 }
 
 impl LocalAi {
@@ -59,6 +61,7 @@ impl LocalAi {
                 .unwrap_or_default(),
             model: RwLock::new(OLLAMA_MODEL.to_string()),
             tools: ToolRegistry::new(),
+            rag: ArchWikiRag::new(),
         }
     }
 
@@ -158,7 +161,7 @@ impl LocalAi {
                 .unwrap_or_default(),
             std::path::PathBuf::from("Modelfile"),
             dirs::config_dir()
-                .map(|p| p.join("alfons-assistant").join("Modelfile"))
+                .map(|p| p.join("gavrik-assistant").join("Modelfile"))
                 .unwrap_or_default(),
         ];
 
@@ -204,6 +207,14 @@ impl LocalAi {
             messages.push(ChatMessage {
                 role: role.to_string(),
                 content: text.clone(),
+            });
+        }
+
+        // Добавляем контекст из Arch Wiki (если найден)
+        if let Some(wiki_context) = self.rag.fetch_context(input).await {
+            messages.push(ChatMessage {
+                role: "system".to_string(),
+                content: wiki_context,
             });
         }
 
@@ -376,7 +387,7 @@ fn generate_modelfile_content() -> &'static str {
     r#"FROM llama3
 
 SYSTEM """
-Ты Альфонс — умный помощник для Arch Linux. Отвечай кратко и по делу на русском языке.
+Ты Gаврик — умный помощник для Arch Linux. Отвечай кратко и по делу на русском языке.
 
 ДОСТУПНЫЕ ИНСТРУМЕНТЫ:
 - [TOOL:время] - текущее время
@@ -395,7 +406,9 @@ SYSTEM """
 
 ПРАВИЛА:
 1. Команды установки/удаления ТОЛЬКО открывают диалог - НЕ говори "установлено"!
-2. Опасные команды (выключить, перезагрузить) - ТОЛЬКО по явному запросу!
+2. СТРОГО ЗАПРЕЩЕНО упоминать перезагрузку или выключение без явного запроса пользователя!
+3. НЕ добавляй фразы "рекомендуется перезагрузить", "может потребоваться перезагрузка" по своей инициативе!
+4. Если в системном контексте есть данные Arch Wiki — используй их в ответе!
 """
 
 PARAMETER temperature 0.7

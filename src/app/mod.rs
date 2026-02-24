@@ -12,6 +12,7 @@
 //! - `installer` — установка в систему
 
 pub mod ai; // Локальный ИИ (Ollama)
+pub mod game; // Мини-игры
 pub mod assistant_app; // Главная структура
 pub mod chat; // История и фоновые задачи
 pub mod command_log; // Логирование команд

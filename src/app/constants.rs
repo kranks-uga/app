@@ -4,15 +4,15 @@
 //! для удобства редактирования и локализации.
 
 // === Приложение ===
-pub const APP_NAME: &str = "Альфонс";
+pub const APP_NAME: &str = "Gаврик";
 pub const APP_VERSION: &str = "0.1.0";
-pub const DEFAULT_ASSISTANT_NAME: &str = "Альфонс";
+pub const DEFAULT_ASSISTANT_NAME: &str = "Gаврик";
 pub const DEFAULT_ACCENT_COLOR: [u8; 3] = [61, 174, 233]; // Голубой
 
 // === Ollama AI ===
 pub const OLLAMA_CHAT_URL: &str = "http://localhost:11434/api/chat";
 pub const OLLAMA_MODEL: &str = "llama3";
-pub const OLLAMA_CUSTOM_MODEL: &str = "alfons";
+pub const OLLAMA_CUSTOM_MODEL: &str = "gavrik";
 pub const OLLAMA_TIMEOUT_SECS: u64 = 60;
 pub const OLLAMA_INSTALL_SCRIPT: &str = "https://ollama.com/install.sh";
 
@@ -21,7 +21,7 @@ pub const YAY_INSTALL_DIR: &str = "/tmp/yay-install";
 pub const YAY_AUR_URL: &str = "https://aur.archlinux.org/yay.git";
 
 // === Пути ===
-pub const CONFIG_APP_NAME: &str = "alfons-assistant";
+pub const CONFIG_APP_NAME: &str = "gavrik-assistant";
 
 // === Лимиты ===
 pub const MAX_CHAT_MESSAGES: usize = 100;
@@ -40,9 +40,9 @@ pub mod messages {
     pub const CHAT_CLEARED: &str = "История чата очищена. Чем могу помочь?";
     pub const PROCESSING: &str = "Обработка...";
     pub const MODEL_CREATING: &str =
-        "Создаю кастомную модель 'alfons'... Это может занять несколько минут.";
-    pub const MODEL_CREATED: &str = "[OK] Модель 'alfons' создана! Переключаю на неё.";
-    pub const MODEL_EXISTS: &str = "Модель 'alfons' уже существует.";
+        "Создаю кастомную модель 'gavrik'... Это может занять несколько минут.";
+    pub const MODEL_CREATED: &str = "[OK] Модель 'gavrik' создана! Переключаю на неё.";
+    pub const MODEL_EXISTS: &str = "Модель 'gavrik' уже существует.";
     pub const OLLAMA_INSTALLING: &str = "Устанавливаю Ollama... Это может занять некоторое время.";
     pub const OLLAMA_ALREADY: &str = "Ollama уже установлена!";
     pub const OLLAMA_STARTING: &str = "Запускаю сервис Ollama...";

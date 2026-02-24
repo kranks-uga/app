@@ -1,6 +1,7 @@
 //! Графический интерфейс
 
 pub mod dialogs;
+pub mod game_ui;
 pub mod widgets;
 
 use super::chat::BackgroundTask;
@@ -28,6 +29,11 @@ pub fn render(ctx: &egui::Context, app: &mut AssistantApp) {
 
     render_input(ctx, app, accent);
     render_chat(ctx, app, accent);
+
+    // Игра
+    if app.show_game {
+        game_ui::render(ctx, app, accent);
+    }
 
     // Диалог с затемнением
     if app.dialog.visible {
@@ -103,6 +109,21 @@ fn render_header(ctx: &egui::Context, app: &mut AssistantApp, accent: egui::Colo
                 // Кнопка настроек
                 if ui.button(egui::RichText::new("[=]").size(16.0)).clicked() {
                     app.show_settings = !app.show_settings;
+                }
+
+                // Кнопка игры
+                let game_btn = egui::RichText::new("[X]").size(16.0);
+                let game_btn = if app.show_game {
+                    game_btn.color(accent)
+                } else {
+                    game_btn
+                };
+                if ui
+                    .button(game_btn)
+                    .on_hover_text("Крестики-нолики")
+                    .clicked()
+                {
+                    app.show_game = !app.show_game;
                 }
 
                 // Индикатор загрузки
@@ -252,18 +273,18 @@ fn render_settings(ctx: &egui::Context, app: &mut AssistantApp, accent: egui::Co
                     let model_exists = app.custom_model_exists.load(Ordering::SeqCst);
                     if model_exists {
                         ui.label(
-                            egui::RichText::new("[OK] Модель 'alfons' готова")
+                            egui::RichText::new("[OK] Модель 'gavrik' готова")
                                 .color(egui::Color32::LIGHT_GREEN),
                         );
                         ui.add_space(3.0);
-                        if ui.button("Использовать alfons").clicked() {
-                            app.config.ollama_model = "alfons".to_string();
-                            app.ai.set_model("alfons");
+                        if ui.button("Использовать gavrik").clicked() {
+                            app.config.ollama_model = "gavrik".to_string();
+                            app.ai.set_model("gavrik");
                             changed = true;
                         }
                     } else {
                         ui.label(
-                            egui::RichText::new("Модель 'alfons' не создана")
+                            egui::RichText::new("Модель 'gavrik' не создана")
                                 .color(egui::Color32::GRAY),
                         );
                         ui.add_space(3.0);
@@ -274,7 +295,7 @@ fn render_settings(ctx: &egui::Context, app: &mut AssistantApp, accent: egui::Co
                         );
                         ui.add_space(3.0);
                         if ui
-                            .button(egui::RichText::new("Создать модель alfons").color(accent))
+                            .button(egui::RichText::new("Создать модель gavrik").color(accent))
                             .clicked()
                         {
                             app.tasks.execute(BackgroundTask::CreateCustomModel);
@@ -287,7 +308,7 @@ fn render_settings(ctx: &egui::Context, app: &mut AssistantApp, accent: egui::Co
                                 let exists = super::ai::local_provider::is_custom_model_exists();
                                 custom_model_exists.store(exists, Ordering::SeqCst);
                                 if exists {
-                                    ai.set_model("alfons");
+                                    ai.set_model("gavrik");
                                 }
                             });
                         }

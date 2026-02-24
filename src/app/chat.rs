@@ -16,12 +16,22 @@ use uuid::Uuid;
 // Диалоги
 // ============================================================================
 
+/// Информация об одном найденном пакете
+#[derive(Debug, Clone)]
+pub struct PackageInfo {
+    pub name: String,
+    pub version: String,
+    pub repo: String,
+    pub description: String,
+}
+
 /// Типы диалоговых окон
 #[derive(Debug, Clone, Default, PartialEq)]
 pub enum DialogType {
     #[default]
     Info,
     PackageSearch,
+    PackageResults,
     Confirmation,
 }
 
@@ -34,6 +44,7 @@ pub struct DialogState {
     pub message: String,
     pub input: String,
     pub package: String,
+    pub search_results: Vec<PackageInfo>,
 }
 
 impl DialogState {
@@ -59,11 +70,21 @@ impl DialogState {
         self.package = package.to_string();
     }
 
+    /// Показать результаты поиска пакетов
+    pub fn show_package_results(&mut self, query: &str, results: Vec<PackageInfo>) {
+        self.visible = true;
+        self.dialog_type = DialogType::PackageResults;
+        self.title = format!("Найдено {} пакетов: \"{}\"", results.len(), query);
+        self.message = String::new();
+        self.search_results = results;
+    }
+
     /// Скрыть диалог
     pub fn hide(&mut self) {
         self.visible = false;
         self.input.clear();
         self.package.clear();
+        self.search_results.clear();
     }
 }
 

@@ -118,24 +118,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "alfons-assistant"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "confy",
- "dirs",
- "eframe",
- "egui",
- "regex",
- "reqwest",
- "rfd",
- "serde",
- "serde_json",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1493,6 +1475,24 @@ dependencies = [
  "pin-project-lite",
  "pin-utils",
  "slab",
+]
+
+[[package]]
+name = "gavrik-assistant"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "confy",
+ "dirs",
+ "eframe",
+ "egui",
+ "regex",
+ "reqwest",
+ "rfd",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
