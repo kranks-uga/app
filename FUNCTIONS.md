@@ -1,4 +1,4 @@
-# Документация функций Альфонс
+# Документация функций Gаврик
 
 Полное описание всех публичных функций, структур и модулей проекта с примерами использования.
 
@@ -279,7 +279,7 @@ pub enum BackgroundTask {
 
 ```rust
 pub struct ChatMessage {
-    pub sender: String,              // "Вы", "Альфонс", "Система"
+    pub sender: String,              // "Вы", "Gаврик", "Система"
     pub text: String,                // Текст сообщения
     pub timestamp: DateTime<Local>,  // Время отправки
 }
@@ -388,7 +388,7 @@ app.tasks.execute(BackgroundTask::StartOllama);
 ```rust
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
-    pub assistant_name: String,        // Имя ассистента (по умолчанию "Альфонс")
+    pub assistant_name: String,        // Имя ассистента (по умолчанию "Gаврик")
     pub accent_color: [u8; 3],         // RGB цвет акцента (по умолчанию [61, 174, 233])
     pub ollama_model: String,          // Модель Ollama (по умолчанию "llama3")
 }
@@ -399,7 +399,7 @@ pub struct Config {
 **Пример JSON:**
 ```json
 {
-  "assistant_name": "Альфонс",
+  "assistant_name": "Gаврик",
   "accent_color": [61, 174, 233],
   "ollama_model": "alfons"
 }
@@ -1212,9 +1212,9 @@ export PATH="$HOME/.local/bin:$PATH"
 
 | Константа | Значение | Описание |
 |-----------|----------|----------|
-| `APP_NAME` | `"Альфонс"` | Название приложения |
+| `APP_NAME` | `"Gаврик"` | Название приложения |
 | `APP_VERSION` | `"0.0.5"` | Версия |
-| `DEFAULT_ASSISTANT_NAME` | `"Альфонс"` | Имя по умолчанию |
+| `DEFAULT_ASSISTANT_NAME` | `"Gаврик"` | Имя по умолчанию |
 | `DEFAULT_ACCENT_COLOR` | `[61, 174, 233]` | Голубой цвет акцента |
 
 ### Константы Ollama

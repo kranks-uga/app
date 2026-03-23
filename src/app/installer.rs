@@ -114,7 +114,7 @@ pub fn install() -> InstallResult {
 
     InstallResult {
         message: format!(
-            "[OK] Альфонс установлен!\n\
+            "[OK] Gаврик установлен!\n\
              Бинарник: {}\n\
              Ярлык добавлен в меню приложений.\n\
              Перезапустите меню или выполните: update-desktop-database",
@@ -161,7 +161,7 @@ pub fn uninstall() -> InstallResult {
 
     if errors.is_empty() {
         InstallResult {
-            message: "[OK] Альфонс удалён из системы".into(),
+            message: "[OK] Gаврик удалён из системы".into(),
         }
     } else {
         InstallResult {
@@ -176,10 +176,10 @@ fn find_custom_icon() -> Option<PathBuf> {
     let icon_names = [
         "icon.png",
         "icon.svg",
-        "alfons.png",
-        "alfons.svg",
-        "alfons-icon.png",
-        "alfons-icon.svg",
+        "gavrik.png",
+        "gavrik.svg",
+        "gavrik-icon.png",
+        "gavrik-icon.svg",
     ];
 
     // Места поиска
@@ -207,7 +207,7 @@ fn find_custom_icon() -> Option<PathBuf> {
 
     // 4. Конфиг директория
     if let Some(config) = dirs::config_dir() {
-        search_paths.push(config.join("alfons-assistant"));
+        search_paths.push(config.join("gavrik-assistant"));
     }
 
     // Ищем иконку
@@ -227,7 +227,7 @@ fn find_custom_icon() -> Option<PathBuf> {
 fn generate_desktop_file(bin_path: &Path, icon_path: &Path) -> String {
     format!(
         r#"[Desktop Entry]
-Name=Альфонс
+Name=Gаврик
 GenericName=AI Assistant
 Comment=Помощник для Arch Linux с AI интеграцией
 Exec={}
@@ -255,7 +255,7 @@ fn generate_icon_svg() -> &'static str {
   </defs>
   <rect width="128" height="128" rx="24" fill="url(#bg)"/>
   <text x="64" y="80" font-family="sans-serif" font-size="64" font-weight="bold"
-        fill="white" text-anchor="middle">A</text>
+        fill="white" text-anchor="middle">G</text>
 </svg>"#
 }
 

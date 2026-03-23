@@ -32,6 +32,7 @@ pub const SESSIONS_PANEL_WIDTH: f32 = 220.0;
 
 // === Сессии чата ===
 pub const CHATS_DIR: &str = "chats";
+pub const GAMES_DIR: &str = "games";
 pub const MAX_SESSION_TITLE_LEN: usize = 30;
 
 // === Сообщения ===

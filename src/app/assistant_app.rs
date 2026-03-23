@@ -51,6 +51,7 @@ pub struct AssistantApp {
     // Игры
     pub games: GameHub,
     pub show_game: bool,
+    pub game_slot_msg: Option<(String, Instant)>,
 
     // Окружение рабочего стола
     pub desktop_env: DesktopEnvironment,
@@ -144,6 +145,7 @@ impl AssistantApp {
             last_ollama_check: Instant::now(),
             games: GameHub::new(),
             show_game: false,
+            game_slot_msg: None,
             desktop_env,
             de_styles,
             tasks,

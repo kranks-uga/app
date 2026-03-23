@@ -4,7 +4,7 @@ use crate::app::game::{
     ActiveGame, Cell, Dir, GameMode, GameState, MsState, TetrisGame, MS_COLS, MS_ROWS,
 };
 use eframe::egui;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const TC: f32 = 22.0; // Тетрис: размер клетки
 const SC: f32 = 17.0; // Змейка: размер клетки
@@ -60,6 +60,10 @@ pub fn render(ctx: &egui::Context, app: &mut crate::app::AssistantApp, accent: e
                 ActiveGame::Tetris      => render_tetris(ui, ctx, app, accent),
                 ActiveGame::Minesweeper => render_minesweeper(ui, app, accent),
             }
+
+            ui.add_space(4.0);
+            ui.separator();
+            render_slots(ui, app, accent);
         });
 }
 
@@ -414,6 +418,48 @@ fn render_minesweeper(ui: &mut egui::Ui, app: &mut crate::app::AssistantApp, acc
         }
         ui.label(egui::RichText::new("ЛКМ — открыть  ПКМ — флаг").color(egui::Color32::GRAY).small());
     });
+}
+
+// ============================================================================
+// Слоты сохранения
+// ============================================================================
+
+fn render_slots(ui: &mut egui::Ui, app: &mut crate::app::AssistantApp, accent: egui::Color32) {
+    // Сбрасываем сообщение через 3 секунды
+    if let Some((_, t)) = &app.game_slot_msg {
+        if t.elapsed().as_secs() >= 3 {
+            app.game_slot_msg = None;
+        }
+    }
+
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Слоты:").size(11.0).color(egui::Color32::GRAY));
+        for i in 1..=3usize {
+            let slot_name = format!("slot{}", i);
+            ui.label(egui::RichText::new(format!("{}", i)).size(11.0).color(egui::Color32::GRAY));
+            if ui.small_button("С").on_hover_text(format!("Сохранить слот {}", i)).clicked() {
+                let msg = match app.games.save_slot(&slot_name) {
+                    Ok(_)  => format!("Слот {} сохранён", i),
+                    Err(e) => format!("Ошибка: {}", e),
+                };
+                app.game_slot_msg = Some((msg, Instant::now()));
+            }
+            if ui.small_button("З").on_hover_text(format!("Загрузить слот {}", i)).clicked() {
+                let msg = match app.games.load_slot(&slot_name) {
+                    Ok(_)  => format!("Слот {} загружен", i),
+                    Err(e) => format!("Ошибка: {}", e),
+                };
+                app.game_slot_msg = Some((msg, Instant::now()));
+            }
+            if i < 3 {
+                ui.separator();
+            }
+        }
+    });
+
+    if let Some((msg, _)) = &app.game_slot_msg {
+        ui.label(egui::RichText::new(msg).size(10.0).color(accent));
+    }
 }
 
 fn ms_num_color(n: u8) -> egui::Color32 {

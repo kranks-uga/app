@@ -2,9 +2,14 @@
 
 use std::collections::VecDeque;
 use std::time::Instant;
+use serde::{Serialize, Deserialize};
+use serde::de::DeserializeOwned;
+use std::fs;
+use std::path::PathBuf;
+use super::constants::{CONFIG_APP_NAME, GAMES_DIR};
 
 // ============================================================================
-// GameHub
+// Диспетчер игр
 // ============================================================================
 
 #[derive(PartialEq, Clone, Copy)]
@@ -20,13 +25,132 @@ pub struct GameHub {
 
 impl GameHub {
     pub fn new() -> Self {
-        Self {
+        let mut hub = Self {
             active:      ActiveGame::TicTacToe,
             tictactoe:   TicTacToe::new(GameMode::VsAi),
             snake:       SnakeGame::new(),
             tetris:      TetrisGame::new(),
             minesweeper: MinesweeperGame::new(),
+        };
+
+        // Попробуем загрузить сохранённые счёты при старте
+        if let Ok(data) = GameHub::read_game_json::<TicTacToeScore>("tictactoe_score.json") {
+            hub.tictactoe.score_x = data.score_x;
+            hub.tictactoe.score_o = data.score_o;
+            hub.tictactoe.draws = data.draws;
         }
+        if let Ok(data) = GameHub::read_game_json::<SnakeScore>("snake_score.json") {
+            hub.snake.high_score = data.high_score;
+            hub.snake.score = data.last_score;
+        }
+        if let Ok(data) = GameHub::read_game_json::<TetrisScore>("tetris_score.json") {
+            hub.tetris.score = data.score;
+            hub.tetris.level = data.level;
+            hub.tetris.lines = data.lines;
+        }
+        if let Ok(data) = GameHub::read_game_json::<MinesResult>("minesweeper_result.json") {
+            hub.minesweeper.elapsed = data.elapsed;
+        }
+
+        hub
+    }
+
+    /// Сохраняет текущую активную игру в слот `name` (файл ~/.config/<app>/games/<name>.json)
+    pub fn save_slot(&self, name: &str) -> Result<(), String> {
+        let mut dir = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
+        dir.push(CONFIG_APP_NAME);
+        dir.push(GAMES_DIR);
+        if let Err(e) = fs::create_dir_all(&dir) {
+            return Err(format!("Не удалось создать директорию сохранений: {}", e));
+        }
+        let path = dir.join(format!("{}.json", name));
+
+        match self.active {
+            ActiveGame::TicTacToe => {
+                let s = TicTacToeSave::from(&self.tictactoe);
+                let json = serde_json::to_string_pretty(&s).map_err(|e| e.to_string())?;
+                fs::write(path, json).map_err(|e| e.to_string())
+            }
+            ActiveGame::Snake => {
+                let s = SnakeSave::from(&self.snake);
+                let json = serde_json::to_string_pretty(&s).map_err(|e| e.to_string())?;
+                fs::write(path, json).map_err(|e| e.to_string())
+            }
+            ActiveGame::Tetris => {
+                let s = TetrisSave::from(&self.tetris);
+                let json = serde_json::to_string_pretty(&s).map_err(|e| e.to_string())?;
+                fs::write(path, json).map_err(|e| e.to_string())
+            }
+            ActiveGame::Minesweeper => {
+                let s = MinesSave::from(&self.minesweeper);
+                let json = serde_json::to_string_pretty(&s).map_err(|e| e.to_string())?;
+                fs::write(path, json).map_err(|e| e.to_string())
+            }
+        }
+    }
+
+    /// Загружает слот `name` в активную игру (перезаписывает состояние соответствующей игры)
+    pub fn load_slot(&mut self, name: &str) -> Result<(), String> {
+        let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
+        path.push(CONFIG_APP_NAME);
+        path.push(GAMES_DIR);
+        path.push(format!("{}.json", name));
+
+        let data = fs::read_to_string(&path).map_err(|e| format!("Не удалось прочитать файл: {}", e))?;
+
+        match self.active {
+            ActiveGame::TicTacToe => {
+                let s: TicTacToeSave = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+                s.apply(&mut self.tictactoe);
+                Ok(())
+            }
+            ActiveGame::Snake => {
+                let s: SnakeSave = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+                s.apply(&mut self.snake);
+                Ok(())
+            }
+            ActiveGame::Tetris => {
+                let s: TetrisSave = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+                s.apply(&mut self.tetris);
+                Ok(())
+            }
+            ActiveGame::Minesweeper => {
+                let s: MinesSave = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+                s.apply(&mut self.minesweeper);
+                Ok(())
+            }
+        }
+    }
+
+    /// Вспомогательная функция записи JSON-данных в папку `~/.config/<app>/games`
+    fn write_game_json<T: Serialize>(file_name: &str, value: &T) -> Result<(), String> {
+        let mut dir = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
+        dir.push(CONFIG_APP_NAME);
+        dir.push(GAMES_DIR);
+        if let Err(e) = fs::create_dir_all(&dir) {
+            return Err(format!("Не удалось создать директорию сохранений: {}", e));
+        }
+        let path = dir.join(file_name);
+        let json = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
+        fs::write(path, json).map_err(|e| e.to_string())
+    }
+
+    fn read_game_json<T: DeserializeOwned>(file_name: &str) -> Result<T, String> {
+        let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
+        path.push(CONFIG_APP_NAME);
+        path.push(GAMES_DIR);
+        path.push(file_name);
+        let data = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&data).map_err(|e| e.to_string())
+    }
+}
+
+impl Drop for GameHub {
+    fn drop(&mut self) {
+        let _ = self.tictactoe.save_scores();
+        let _ = self.snake.save_score();
+        let _ = self.tetris.save_score();
+        let _ = self.minesweeper.save_result();
     }
 }
 
@@ -68,10 +192,14 @@ impl TicTacToe {
         self.board[idx] = self.current;
         if let Some(w) = ttt_winner(&self.board) {
             match w { Cell::X => self.score_x += 1, Cell::O => self.score_o += 1, _ => {} }
-            self.state = GameState::Won(w); return;
+            self.state = GameState::Won(w);
+            let _ = self.save_scores();
+            return;
         }
         if self.board.iter().all(|c| *c != Cell::Empty) {
-            self.draws += 1; self.state = GameState::Draw; return;
+            self.draws += 1; self.state = GameState::Draw;
+            let _ = self.save_scores();
+            return;
         }
         self.current = ttt_flip(self.current);
         if self.mode == GameMode::VsAi && self.current == Cell::O {
@@ -88,7 +216,19 @@ impl TicTacToe {
             }
         }
     }
+
+    fn save_scores(&self) -> Result<(), String> {
+        #[derive(Serialize, Deserialize)]
+        struct TttScore { score_x: u32, score_o: u32, draws: u32 }
+        let s = TttScore { score_x: self.score_x, score_o: self.score_o, draws: self.draws };
+        GameHub::write_game_json("tictactoe_score.json", &s)
+    }
 }
+
+// Вспомогательные типы для загрузки/сохранения
+#[derive(Serialize, Deserialize)]
+struct TicTacToeScore { score_x: u32, score_o: u32, draws: u32 }
+
 
 fn ttt_flip(c: Cell) -> Cell { match c { Cell::X => Cell::O, Cell::O => Cell::X, _ => Cell::Empty } }
 
@@ -182,7 +322,9 @@ impl SnakeGame {
             Dir::Right => (head.0+1, head.1),
         };
         if nh.0<0 || nh.0>=self.cols || nh.1<0 || nh.1>=self.rows || self.body.contains(&nh) {
-            self.dead = true; return true;
+            self.dead = true;
+            let _ = self.save_score();
+            return true;
         }
         self.body.push_front(nh);
         if nh == self.food {
@@ -205,13 +347,24 @@ impl SnakeGame {
             if !self.body.contains(&(x,y)) { self.food = (x,y); return; }
         }
     }
+
+    fn save_score(&self) -> Result<(), String> {
+        #[derive(Serialize, Deserialize)]
+        struct SnakeScore { high_score: u32, last_score: u32 }
+        let s = SnakeScore { high_score: self.high_score, last_score: self.score };
+        GameHub::write_game_json("snake_score.json", &s)
+    }
 }
+
+#[derive(Serialize, Deserialize)]
+struct SnakeScore { high_score: u32, last_score: u32 }
+
 
 // ============================================================================
 // Тетрис
 // ============================================================================
 
-// [тип][поворот] — 4×4 bitmask (MSB = верхний левый)
+// [тип][поворот] — 4×4 битовая маска (MSB = верхний левый)
 const TETROS: [[u16;4];7] = [
     [0x0F00,0x2222,0x00F0,0x4444], // I
     [0x0660,0x0660,0x0660,0x0660], // O
@@ -223,7 +376,7 @@ const TETROS: [[u16;4];7] = [
 ];
 
 pub struct TetrisGame {
-    pub board: [[u8;10];20],  // 0=empty, 1-7=цвет
+    pub board: [[u8;10];20],  // 0=пусто, 1-7=цвет
     pub ptype: usize,
     pub prot:  usize,
     pub px:    i32,
@@ -322,6 +475,11 @@ impl TetrisGame {
         self.spawn();
     }
 
+    // Вызывается при окончании игры (game over) — сохраняем счёт
+    fn on_game_over(&self) {
+        let _ = self.save_score();
+    }
+
     fn clear_lines(&mut self) {
         let mut cleared=0u32;
         let mut nb=[[0u8;10];20];
@@ -341,7 +499,10 @@ impl TetrisGame {
     fn spawn(&mut self) {
         self.ptype=self.next; self.prot=0; self.px=3; self.py=0;
         self.next=(self.rand()%7) as usize;
-        if !self.valid(&self.cells()) { self.over=true; }
+        if !self.valid(&self.cells()) { 
+            self.over=true; 
+            let _ = self.save_score();
+        }
         self.last_fall=Instant::now();
     }
 
@@ -352,6 +513,8 @@ impl TetrisGame {
         if self.valid(&cc) { self.py+=1; false }
         else { self.place(); true }
     }
+
+    
 }
 
 // ============================================================================
@@ -451,6 +614,7 @@ impl MinesweeperGame {
                 }
             }
             if let Some(t) = self.start_time { self.elapsed = t.elapsed().as_secs(); }
+            let _ = self.save_result();
             return;
         }
 
@@ -484,6 +648,7 @@ impl MinesweeperGame {
         }
         self.state = MsState::Won;
         if let Some(t) = self.start_time { self.elapsed = t.elapsed().as_secs(); }
+        let _ = self.save_result();
     }
 
     pub fn flag(&mut self, col: usize, row: usize) {
@@ -506,6 +671,13 @@ impl MinesweeperGame {
             _ => self.elapsed,
         }
     }
+
+    fn save_result(&self) -> Result<(), String> {
+        #[derive(Serialize)]
+        struct MinesResult { state: u8, elapsed: u64 }
+        let s = MinesResult { state: match self.state { MsState::Waiting=>0, MsState::Playing=>1, MsState::Won=>2, MsState::Lost=>3 }, elapsed: self.elapsed };
+        GameHub::write_game_json("minesweeper_result.json", &s)
+    }
 }
 
 // ============================================================================
@@ -522,3 +694,199 @@ fn now_nanos() -> u64 {
 fn lcg(x: u64) -> u64 {
     x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407)
 }
+
+// ============================================================================
+// Форматы сохранений
+// ============================================================================
+
+#[derive(Serialize, Deserialize)]
+struct TicTacToeSave {
+    board: [u8; 9],
+    current: u8,
+    state: u8, // 0=игра,1=победа_X,2=победа_O,3=ничья
+    mode: u8,  // 0=VsAi,1=Два игрока
+    score_x: u32,
+    score_o: u32,
+    draws: u32,
+}
+
+impl From<&TicTacToe> for TicTacToeSave {
+    fn from(t: &TicTacToe) -> Self {
+        let mut board = [0u8; 9];
+        for (i, c) in t.board.iter().enumerate() {
+            board[i] = match c { Cell::Empty => 0, Cell::X => 1, Cell::O => 2 };
+        }
+        let state = match t.state {
+            GameState::Playing => 0,
+            GameState::Won(Cell::X) => 1,
+            GameState::Won(Cell::O) => 2,
+            GameState::Won(_) => 0,
+            GameState::Draw => 3,
+        };
+        let mode = match t.mode { GameMode::VsAi => 0, GameMode::TwoPlayers => 1 };
+        let current = match t.current { Cell::Empty => 0, Cell::X => 1, Cell::O => 2 };
+        TicTacToeSave { board, current, state, mode, score_x: t.score_x, score_o: t.score_o, draws: t.draws }
+    }
+}
+
+impl TicTacToeSave {
+    fn apply(&self, t: &mut TicTacToe) {
+        for (i, v) in self.board.iter().enumerate() {
+            t.board[i] = match v { 0 => Cell::Empty, 1 => Cell::X, 2 => Cell::O, _ => Cell::Empty };
+        }
+        t.current = match self.current { 1 => Cell::X, 2 => Cell::O, _ => Cell::X };
+        t.state = match self.state {
+            1 => GameState::Won(Cell::X),
+            2 => GameState::Won(Cell::O),
+            3 => GameState::Draw,
+            _ => GameState::Playing,
+        };
+        t.mode = if self.mode == 1 { GameMode::TwoPlayers } else { GameMode::VsAi };
+        t.score_x = self.score_x;
+        t.score_o = self.score_o;
+        t.draws = self.draws;
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct SnakeSave {
+    body: Vec<(i32,i32)>,
+    dir: u8,
+    next_dir: u8,
+    food: (i32,i32),
+    cols: i32,
+    rows: i32,
+    dead: bool,
+    score: u32,
+    high_score: u32,
+    step_ms: u64,
+    rng: u64,
+}
+
+impl From<&SnakeGame> for SnakeSave {
+    fn from(s: &SnakeGame) -> Self {
+        SnakeSave {
+            body: s.body.iter().cloned().collect(),
+            dir: match s.dir { Dir::Up=>0, Dir::Down=>1, Dir::Left=>2, Dir::Right=>3 },
+            next_dir: match s.next_dir { Dir::Up=>0, Dir::Down=>1, Dir::Left=>2, Dir::Right=>3 },
+            food: s.food,
+            cols: s.cols,
+            rows: s.rows,
+            dead: s.dead,
+            score: s.score,
+            high_score: s.high_score,
+            step_ms: s.step_ms,
+            rng: s.rng,
+        }
+    }
+}
+
+impl SnakeSave {
+    fn apply(&self, s: &mut SnakeGame) {
+        s.body = self.body.iter().cloned().collect();
+        s.dir = match self.dir { 0=>Dir::Up, 1=>Dir::Down, 2=>Dir::Left, _=>Dir::Right };
+        s.next_dir = match self.next_dir { 0=>Dir::Up, 1=>Dir::Down, 2=>Dir::Left, _=>Dir::Right };
+        s.food = self.food;
+        s.cols = self.cols;
+        s.rows = self.rows;
+        s.dead = self.dead;
+        s.score = self.score;
+        s.high_score = self.high_score;
+        s.step_ms = self.step_ms;
+        s.rng = self.rng;
+        // обновляем `last_step` на текущее время
+        s.last_step = Instant::now();
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct TetrisSave {
+    board: [[u8;10];20],
+    ptype: usize,
+    prot: usize,
+    px: i32,
+    py: i32,
+    next: usize,
+    score: u32,
+    level: u32,
+    lines: u32,
+    over: bool,
+    rng: u64,
+}
+
+impl From<&TetrisGame> for TetrisSave {
+    fn from(t: &TetrisGame) -> Self {
+        TetrisSave { board: t.board, ptype: t.ptype, prot: t.prot, px: t.px, py: t.py, next: t.next, score: t.score, level: t.level, lines: t.lines, over: t.over, rng: t.rng }
+    }
+}
+
+impl TetrisSave {
+    fn apply(&self, t: &mut TetrisGame) {
+        t.board = self.board;
+        t.ptype = self.ptype;
+        t.prot = self.prot;
+        t.px = self.px;
+        t.py = self.py;
+        t.next = self.next;
+        t.score = self.score;
+        t.level = self.level;
+        t.lines = self.lines;
+        t.over = self.over;
+        t.rng = self.rng;
+        t.last_fall = Instant::now();
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct TetrisScore { score: u32, level: u32, lines: u32 }
+
+impl TetrisGame {
+    fn save_score(&self) -> Result<(), String> {
+        let s = TetrisScore { score: self.score, level: self.level, lines: self.lines };
+        GameHub::write_game_json("tetris_score.json", &s)
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct MinesSave {
+    mines: [[bool; MS_COLS]; MS_ROWS],
+    revealed: [[bool; MS_COLS]; MS_ROWS],
+    flagged: [[bool; MS_COLS]; MS_ROWS],
+    state: u8, // 0=ожидание,1=игра,2=победа,3=поражение
+    flags: i32,
+    hit: Option<(usize,usize)>,
+    elapsed: u64,
+    rng: u64,
+}
+
+impl From<&MinesweeperGame> for MinesSave {
+    fn from(m: &MinesweeperGame) -> Self {
+        MinesSave {
+            mines: m.mines,
+            revealed: m.revealed,
+            flagged: m.flagged,
+            state: match m.state { MsState::Waiting=>0, MsState::Playing=>1, MsState::Won=>2, MsState::Lost=>3 },
+            flags: m.flags,
+            hit: m.hit,
+            elapsed: m.elapsed,
+            rng: m.rng,
+        }
+    }
+}
+
+impl MinesSave {
+    fn apply(&self, m: &mut MinesweeperGame) {
+        m.mines = self.mines;
+        m.revealed = self.revealed;
+        m.flagged = self.flagged;
+        m.state = match self.state { 0=>MsState::Waiting, 1=>MsState::Playing, 2=>MsState::Won, _=>MsState::Lost };
+        m.flags = self.flags;
+        m.hit = self.hit;
+        m.elapsed = self.elapsed;
+        m.rng = self.rng;
+        m.start_time = None;
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct MinesResult { state: u8, elapsed: u64 }
